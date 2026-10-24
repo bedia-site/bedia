@@ -5,7 +5,7 @@
 'use strict';
 
 const SUPABASE_URL = 'https://xnrmfpuhktabeqlcraaw.supabase.co';
-const SUPABASE_ANON_KEY = 'COLA-AQUI-A-CHAVE-COMPLETA';   // <<< Project Settings > API Keys > Publishable key (copiar)
+const SUPABASE_ANON_KEY = 'sb_publishable_u2dbIcCN2FqBLlvoutZslw_wEVlYGn8';   // chave pública (publishable): pode ficar no site
 const BUCKET = 'art';
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
