@@ -1,0 +1,2050 @@
+/* =====================================================
+   BÉDIA - Lógica da aplicação
+   Dados guardados no navegador (IndexedDB) enquanto não há servidor.
+   Tudo o que toca em dados passa pelas funções da secção "DADOS" e
+   "AÇÕES", para trocar por uma base de dados real mais tarde.
+   ===================================================== */
+'use strict';
+
+/* ---------- CONFIGURAÇÃO ---------- */
+const PAGE_SIZE = 12;
+const MAX_IMAGES = 80;          // páginas/imagens por publicação (PDF incluído)
+const MAX_FILE_MB = 20;         // por imagem
+const MAX_PDF_MB = 50;          // por PDF
+const PDF_MAX_SIDE = 1400;      // lado maior (px) de cada página convertida
+const PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const SUPPORT_EMAIL = 'suporte@bedia.com'; // <<< troca pelo teu e-mail real
+const PRESET_COLORS = ['#a855f7', '#06b6d4', '#ec4899', '#10b981', '#f59e0b'];
+const CATEGORY_LABEL = {
+    'Mangá / Quadrinhos': '📖 Mangá',
+    'Personagens Originais': '🎭 Personagens (OC)',
+    'Ilustração 2D': '🎨 Ilustração',
+    'Esboços': '✏️ Esboço'
+};
+const PLACEHOLDER_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500"><rect width="400" height="500" fill="#131622"/><text x="200" y="255" font-size="40" text-anchor="middle" fill="#475569">🖼️</text></svg>'
+);
+
+/* ---------- MASCOTE ----------
+   Ficheiros PNG na mesma pasta do index.html.
+   <<< Se os teus ficheiros tiverem outro nome, muda só aqui >>> */
+const MASCOT = {
+    up:        'mascote1.png', // apontando para cima
+    right:     'mascote2.png', // apontando para a direita (formulário)
+    happy:     'mascote3.png', // feliz / comemorando
+    worried:   'mascote4.png', // preocupado / assustado
+    surprised: 'mascote5.png', // surpreso
+    sleepy:    'mascote6.png', // a dormir / à espera
+    cover:     'mascote7.png'  // tapando os olhos
+};
+// Carrega as imagens antes, para a troca de pose não piscar
+Object.values(MASCOT).forEach(src => { const i = new Image(); i.src = src; });
+
+/* ---------- UTILITÁRIOS ---------- */
+const $ = (id) => document.getElementById(id);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const keyOf = (h) => String(h || '').replace(/^@/, '').trim().toLowerCase();
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const prefersReducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+// Guardar pequenas preferências no navegador (nunca rebenta se o navegador bloquear)
+const LS = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignora */ } }
+};
+
+function esc(str) {
+    return String(str ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+}
+
+function timeAgo(ts) {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 45) return 'agora';
+    const m = Math.floor(s / 60);
+    if (m < 60) return `há ${m} min`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `há ${h} h`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `há ${d} d`;
+    return new Date(ts).toLocaleDateString('pt-BR', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function setFlex(el, on) {
+    el.classList.toggle('hidden', !on);
+    el.classList.toggle('flex', on);
+}
+
+function showError(el, msg) {
+    el.textContent = msg;
+    el.classList.toggle('hidden', !msg);
+}
+
+// Repete uma animação CSS (remove a classe, força o redesenho e volta a pôr)
+function playAnim(el, cls) {
+    if (!el) return;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+    el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
+}
+
+/* ---------- ARMAZENAMENTO (IndexedDB) ---------- */
+const Store = {
+    db: null,
+    ok: false,
+
+    open() {
+        return new Promise(resolve => {
+            try {
+                const req = indexedDB.open('bedia', 1);
+                req.onupgradeneeded = () => {
+                    req.result.createObjectStore('meta');
+                    req.result.createObjectStore('images');
+                };
+                req.onsuccess = () => { this.db = req.result; this.ok = true; resolve(true); };
+                req.onerror = () => resolve(false);
+                req.onblocked = () => resolve(false);
+            } catch (e) { resolve(false); }
+        });
+    },
+
+    _run(store, mode, fn) {
+        return new Promise(resolve => {
+            if (!this.ok) return resolve(undefined);
+            try {
+                const tx = this.db.transaction(store, mode);
+                const result = fn(tx.objectStore(store));
+                tx.oncomplete = () => resolve(result && 'result' in result ? result.result : undefined);
+                tx.onerror = tx.onabort = () => resolve(undefined);
+            } catch (e) { resolve(undefined); }
+        });
+    },
+
+    get: (store, key) => Store._run(store, 'readonly', s => s.get(key)),
+    put: (store, key, val) => Store._run(store, 'readwrite', s => s.put(val, key)),
+    del: (store, key) => Store._run(store, 'readwrite', s => s.delete(key)),
+
+    allImages() {
+        return new Promise(resolve => {
+            const out = new Map();
+            if (!this.ok) return resolve(out);
+            try {
+                const tx = this.db.transaction('images', 'readonly');
+                tx.objectStore('images').openCursor().onsuccess = (e) => {
+                    const c = e.target.result;
+                    if (c) { out.set(c.key, c.value); c.continue(); }
+                };
+                tx.oncomplete = () => resolve(out);
+                tx.onerror = tx.onabort = () => resolve(out);
+            } catch (e) { resolve(out); }
+        });
+    }
+};
+
+/* ---------- DADOS ---------- */
+let db = { users: {}, posts: [], notifications: [], reports: [], session: null };
+const images = new Map(); // id -> dataURL (substituir por URLs quando houver servidor)
+let saveTimer = null;
+
+function persist() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { saveTimer = null; Store.put('meta', 'db', db); }, 150);
+}
+
+// Se fechares o separador antes dos 150 ms, grava logo para não perder a última ação
+window.addEventListener('pagehide', () => {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; Store.put('meta', 'db', db); }
+});
+
+async function addImage(dataUrl) {
+    const id = uid();
+    images.set(id, dataUrl);
+    await Store.put('images', id, dataUrl);
+    return id;
+}
+
+function dropImage(id) {
+    images.delete(id);
+    Store.del('images', id);
+}
+
+const imgSrc = (id) => images.get(id) || PLACEHOLDER_IMG;
+const me = () => (db.session && db.users[db.session]) || null;
+const getUser = (key) => db.users[key] || null;
+const getPost = (id) => db.posts.find(p => p.id === id) || null;
+
+function notify(toKey, type, fromKey, postId) {
+    if (!toKey || toKey === fromKey) return;
+    db.notifications.unshift({ id: uid(), toKey, type, fromKey, postId: postId || null, createdAt: Date.now(), read: false });
+    db.notifications = db.notifications.slice(0, 300);
+}
+
+async function hashPass(pass, salt) {
+    const text = salt + pass;
+    try {
+        if (window.crypto && crypto.subtle) {
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+            return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+    } catch (e) { /* cai para o método simples */ }
+    let h = 5381;
+    for (const c of text) h = ((h << 5) + h + c.charCodeAt(0)) | 0;
+    return 'x' + h;
+}
+
+/* ---------- IMAGENS: compressão ---------- */
+function compressImage(file, maxSide = 1600, quality = 0.85, square = false) {
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            let sx = 0, sy = 0, sw = img.width, sh = img.height;
+            if (square) {
+                const s = Math.min(sw, sh);
+                sx = (sw - s) / 2; sy = (sh - s) / 2; sw = sh = s;
+            }
+            const scale = Math.min(1, maxSide / Math.max(sw, sh));
+            const w = Math.max(1, Math.round(sw * scale));
+            const h = Math.max(1, Math.round(sh * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx2 = canvas.getContext('2d');
+            ctx2.fillStyle = '#ffffff';
+            ctx2.fillRect(0, 0, w, h);
+            ctx2.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+            URL.revokeObjectURL(url);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('imagem inválida')); };
+        img.src = url;
+    });
+}
+
+/* ---------- PDF: converte cada página em imagem ---------- */
+let pdfLibPromise = null;
+function loadPdfJs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (!pdfLibPromise) {
+        pdfLibPromise = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = PDFJS_URL;
+            s.onload = () => {
+                try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; resolve(window.pdfjsLib); }
+                catch (e) { pdfLibPromise = null; reject(e); }
+            };
+            s.onerror = () => { pdfLibPromise = null; reject(new Error('Não foi possível carregar o leitor de PDF.')); };
+            document.head.appendChild(s);
+        });
+    }
+    return pdfLibPromise;
+}
+
+// Devolve { pages: [dataURL...], cut: true se o PDF tinha mais páginas do que cabem }
+async function pdfToImages(file, maxPages, onProgress) {
+    const lib = await loadPdfJs();
+    const pdf = await lib.getDocument({ data: await file.arrayBuffer() }).promise;
+    const total = Math.min(pdf.numPages, maxPages);
+    const pages = [];
+    for (let n = 1; n <= total; n++) {
+        const page = await pdf.getPage(n);
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(2, PDF_MAX_SIDE / Math.max(base.width, base.height));
+        const vp = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(vp.width));
+        canvas.height = Math.max(1, Math.round(vp.height));
+        const ctx2 = canvas.getContext('2d');
+        ctx2.fillStyle = '#ffffff';
+        ctx2.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx2, viewport: vp }).promise;
+        pages.push(canvas.toDataURL('image/jpeg', 0.82));
+        page.cleanup();
+        if (onProgress) onProgress(n, total);
+    }
+    const cut = pdf.numPages > maxPages;
+    pdf.destroy();
+    return { pages, cut };
+}
+
+/* ---------- ESTADO DA INTERFACE ---------- */
+let view = { name: 'home', arg: null };
+let activeCategory = 'Todos';
+let searchQuery = '';
+let visibleCount = PAGE_SIZE;
+let selectedPostId = null;
+let pageIndex = 0;
+let authMode = 'login';
+let afterAuth = null;
+let selectedColor = PRESET_COLORS[0];
+let profileColor = PRESET_COLORS[0];
+let profileAvatarData = undefined; // undefined = sem alteração, null = remover, string = nova foto
+let editingPostId = null;
+let draft = [];                    // imagens a publicar (dataURLs comprimidos)
+let editOrder = [];                // ao editar: ids das imagens, pela ordem (a primeira é a capa)
+let converting = false;            // true enquanto um PDF está a ser convertido
+let reportPostId = null;
+let lastRouteHash = '#/';
+let firstRender = true;
+const revealed = new Set();        // obras sensíveis já reveladas nesta sessão
+const seenImgs = new Set();        // capas que já carregaram (evita piscar ao redesenhar o feed)
+const modalStack = [];
+let replyingTo = null;             // id do comentário a que se está a responder
+let readerMode = LS.get('bedia:readerMode', 'page') === 'scroll' ? 'scroll' : 'page'; // 'page' ou 'scroll' (vertical)
+let readerFull = false;            // leitor em ecrã inteiro
+let readerHome = null;             // marcador para devolver o leitor ao sítio
+let readerRealFs = false;          // true se o navegador também entrou em ecrã inteiro a sério
+
+/* ---------- MODAIS ---------- */
+function openModal(id) {
+    const el = $(id);
+    el.classList.remove('hidden');
+    if (!modalStack.includes(id)) modalStack.push(id);
+    document.body.style.overflow = 'hidden';
+}
+
+function closeModal(id) {
+    const el = $(id);
+    if (!el || el.classList.contains('hidden')) return;
+    if (id === 'detailModal') return closeDetail();
+    if (id === 'confirmModal') return resolveConfirm(false);
+    hideModal(id);
+}
+
+function hideModal(id) {
+    if (id === 'detailModal' && readerFull) exitReaderFull();
+    $(id).classList.add('hidden');
+    const i = modalStack.indexOf(id);
+    if (i >= 0) modalStack.splice(i, 1);
+    if (!modalStack.length) document.body.style.overflow = '';
+}
+
+let confirmResolve = null;
+// opts: { pose: chave de MASCOT (o mascote faz a pergunta), cancelLabel }
+function askConfirm(title, text, okLabel = 'Confirmar', opts = {}) {
+    return new Promise(resolve => {
+        confirmResolve = resolve;
+        const withMascot = !!(opts.pose && MASCOT[opts.pose]);
+        const wrap = $('confirmMascotWrap');
+        wrap.classList.toggle('hidden', !withMascot);
+        wrap.classList.toggle('flex', withMascot);
+        $('confirmTitle').classList.toggle('hidden', withMascot);
+        if (withMascot) {
+            $('confirmMascot').src = MASCOT[opts.pose];
+            $('confirmBubble').textContent = title;
+            playAnim($('confirmMascot'), 'mascot-pop');
+        } else {
+            $('confirmTitle').textContent = title;
+        }
+        $('confirmText').textContent = text;
+        $('confirmOk').textContent = okLabel;
+        $('confirmCancel').textContent = opts.cancelLabel || 'Cancelar';
+        openModal('confirmModal');
+    });
+}
+function resolveConfirm(value) {
+    if (!confirmResolve) return;
+    const r = confirmResolve;
+    confirmResolve = null;
+    hideModal('confirmModal');
+    r(value);
+}
+
+/* ---------- A PROCESSAR (mascote a dormir + "A processar...") ----------
+   const p = startProcessing('A entrar');   // mostra já
+   const p = startProcessing('A converter', { delay: 350 }); // só aparece se demorar
+   p.update('novo texto');
+   await p.done(800);                        // fica no mínimo 800 ms visível
+   await p.done(800, () => fazAlgo());       // fazAlgo() corre mesmo antes de fechar */
+let procCount = 0;
+function startProcessing(text = 'A processar', opts = {}) {
+    const overlay = $('processingOverlay');
+    const h = { text, shown: false, shownAt: 0, finished: false, timer: null };
+    const show = () => {
+        if (h.finished || h.shown) return;
+        h.shown = true; h.shownAt = Date.now(); procCount++;
+        $('processingText').textContent = h.text;
+        overlay.classList.remove('hidden');
+    };
+    if (opts.delay) h.timer = setTimeout(show, opts.delay); else show();
+    return {
+        update(t) { h.text = t; if (h.shown) $('processingText').textContent = t; },
+        async done(minMs = 0, beforeHide) {
+            if (h.finished) return;
+            h.finished = true;
+            clearTimeout(h.timer);
+            if (h.shown && !prefersReducedMotion()) {
+                const wait = minMs - (Date.now() - h.shownAt);
+                if (wait > 0) await sleep(wait);
+            }
+            if (beforeHide) beforeHide();
+            if (h.shown) {
+                procCount = Math.max(0, procCount - 1);
+                if (!procCount) overlay.classList.add('hidden');
+            }
+        }
+    };
+}
+
+/* ---------- TOAST ---------- */
+let toastTimer = null;
+function toast(msg, type = 'ok') {
+    const t = $('toast');
+    $('toastMsg').textContent = msg;
+    const icon = $('toastIcon');
+    icon.className = type === 'error'
+        ? 'fa-solid fa-triangle-exclamation text-neonPink text-base'
+        : 'fa-solid fa-circle-check text-neonCyan text-base';
+    t.classList.remove('translate-y-24', 'opacity-0');
+    t.classList.add('translate-y-0', 'opacity-100');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+        t.classList.remove('translate-y-0', 'opacity-100');
+        t.classList.add('translate-y-24', 'opacity-0');
+    }, 3200);
+}
+
+/* ---------- COMPONENTES VISUAIS ---------- */
+function avatarHTML(u, size = 'w-9 h-9', text = 'text-xs') {
+    if (!u) {
+        return `<div class="${size} rounded-full bg-slate-700 flex items-center justify-center ${text} font-bold text-white shrink-0">?</div>`;
+    }
+    if (u.avatarId && images.has(u.avatarId)) {
+        return `<img src="${images.get(u.avatarId)}" alt="" class="${size} rounded-full object-cover shrink-0 border border-white/10">`;
+    }
+    return `<div class="${size} rounded-full flex items-center justify-center ${text} font-bold text-white shrink-0" style="background:${esc(u.color)}">${esc(u.handle.charAt(0).toUpperCase())}</div>`;
+}
+
+function buildColorPicker(container, getColor, setColor) {
+    container.innerHTML = PRESET_COLORS.map(c =>
+        `<button type="button" data-color="${c}" class="w-7 h-7 rounded-full border-2 transition-transform" style="background:${c}" aria-label="Cor ${c}"></button>`
+    ).join('');
+    const paint = () => container.querySelectorAll('button').forEach(b => {
+        const on = b.dataset.color === getColor();
+        b.style.borderColor = on ? '#fff' : 'rgba(255,255,255,.2)';
+        b.style.transform = on ? 'scale(1.2)' : 'scale(1)';
+    });
+    container.onclick = (e) => {
+        const b = e.target.closest('button[data-color]');
+        if (!b) return;
+        setColor(b.dataset.color);
+        paint();
+    };
+    paint();
+}
+
+/* ---------- MASCOTE: fala e poses ---------- */
+// pose: chave de MASCOT · text: texto do balão · anim: pop | hop | shake
+function mascotSay(pose, text, anim = 'pop') {
+    const img = $('authMascot');
+    const bubbleText = $('authBubbleText');
+    if (!img || !bubbleText) return;
+
+    if (MASCOT[pose] && img.dataset.pose !== pose) {
+        img.src = MASCOT[pose];
+        img.dataset.pose = pose;
+    }
+    if (text !== undefined) {
+        bubbleText.textContent = text;
+        playAnim($('authBubble'), 'bubble-pop');
+    }
+    playAnim(img, 'mascot-' + anim);
+}
+
+// Dicas que o mascote dá conforme o campo onde a pessoa está
+const AUTH_HINTS = {
+    authUsername: () => authMode === 'signup'
+        ? ['right', 'Escolhe um nome único para o teu perfil!']
+        : ['right', 'Quem és tu, artista?'],
+    authEmail: () => ['right', 'Prometo não enviar spam!'],
+    authPassword: () => ['cover', 'Não estou a ver nada, juro!']
+};
+let skipNextHint = false; // evita que a dica do campo apague o aviso do mascote ("Precisas de entrar primeiro")
+
+/* ---------- AUTENTICAÇÃO ---------- */
+function openAuth(mode = 'login', warning = '', then = null) {
+    afterAuth = then;
+    setAuthMode(mode);
+    $('authLockWarning').classList.toggle('hidden', !warning);
+    $('authLockWarning').classList.toggle('flex', !!warning);
+    if (warning) {
+        $('authLockText').textContent = warning;
+        mascotSay('surprised', 'Ei! Precisas de entrar primeiro.', 'shake');
+    }
+    showError($('authError'), '');
+    openModal('authModal');
+    setTimeout(() => { skipNextHint = !!warning; $('authUsername').focus(); }, 50);
+}
+
+function setAuthMode(mode) {
+    authMode = mode;
+    const signup = mode === 'signup';
+    $('authModalTitle').textContent = signup ? 'Criar Conta no Bédia' : 'Entrar no Bédia';
+    $('authModalSubtitle').textContent = signup
+        ? 'Crie seu perfil para publicar seus mangás e artes!'
+        : 'Bem-vindo de volta, artista!';
+    $('authUsernameLabel').textContent = signup ? 'Nome de utilizador *' : 'Utilizador ou e-mail *';
+    $('authUsername').placeholder = signup ? 'Ex: OtakuArtist' : 'Seu utilizador ou e-mail';
+    // Os campos extras abrem e fecham com animação (classe "open", ver style.css)
+    $('authEmailGroup').classList.toggle('open', signup);
+    $('authColorGroup').classList.toggle('open', signup);
+    $('authPassword').autocomplete = signup ? 'new-password' : 'current-password';
+    $('authSubmitBtn').textContent = signup ? 'Criar Minha Conta' : 'Entrar';
+    $('toggleAuthModeBtn').textContent = signup ? 'Já tem uma conta? Fazer Login' : 'Não tem conta? Criar Conta';
+    mascotSay('up', signup
+        ? 'Novo por aqui? Vamos criar a tua conta!'
+        : 'Bem-vindo de volta, artista! Entra aí.', 'hop');
+}
+
+// Troca entre Entrar e Criar Conta com o cartão a virar
+function switchAuthMode(mode) {
+    const side = $('authFormSide');
+    if (!side || prefersReducedMotion()) return setAuthMode(mode);
+    side.classList.remove('flip-in');
+    side.classList.add('flip-out');
+    setTimeout(() => {
+        setAuthMode(mode);
+        showError($('authError'), '');
+        side.classList.remove('flip-out');
+        side.classList.add('flip-in');
+        setTimeout(() => side.classList.remove('flip-in'), 320);
+    }, 220);
+}
+
+function requireLogin(message, then) {
+    if (me()) return true;
+    openAuth('signup', message || 'Você precisa estar logado para fazer isto.', then);
+    return false;
+}
+
+async function submitAuth(e) {
+    e.preventDefault();
+    const btn = $('authSubmitBtn');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try { await runAuth(); } finally { btn.disabled = false; }
+}
+
+async function runAuth() {
+    const errEl = $('authError');
+    showError(errEl, '');
+    const fail = (msg) => {
+        showError(errEl, msg);
+        mascotSay('worried', 'Ops! Confere os dados.', 'shake');
+    };
+    const rawUser = $('authUsername').value.trim();
+    const password = $('authPassword').value;
+    const signup = authMode === 'signup';
+    let proc = null;
+    let welcome = '';
+
+    try {
+        if (signup) {
+            const handle = rawUser.replace(/^@/, '');
+            const email = $('authEmail').value.trim().toLowerCase();
+            if (!/^[a-zA-Z0-9_.]{3,20}$/.test(handle)) return fail('O utilizador deve ter 3 a 20 caracteres: letras, números, _ ou .');
+            if (!/^\S+@\S+\.\S+$/.test(email)) return fail('Escreva um e-mail válido.');
+            if (password.length < 6) return fail('A senha deve ter pelo menos 6 caracteres.');
+            const key = handle.toLowerCase();
+            if (db.users[key]) return fail('Esse nome de utilizador já está em uso.');
+            if (Object.values(db.users).some(u => u.email === email)) return fail('Esse e-mail já tem uma conta.');
+
+            proc = startProcessing('A criar a tua conta');
+            const salt = uid();
+            db.users[key] = {
+                key, handle, email, salt,
+                passHash: await hashPass(password, salt),
+                color: selectedColor, avatarId: null, bio: '', link: '',
+                createdAt: Date.now(), following: [], bookmarks: []
+            };
+            db.session = key;
+            welcome = `Bem-vindo ao Bédia, @${handle}!`;
+        } else {
+            const q = rawUser.replace(/^@/, '').toLowerCase();
+            proc = startProcessing('A entrar');
+            const user = db.users[q] || Object.values(db.users).find(u => u.email === q);
+            if (!user || !password || (await hashPass(password, user.salt)) !== user.passHash) {
+                await proc.done(350);
+                return fail('Utilizador ou senha incorretos.');
+            }
+            db.session = user.key;
+            welcome = `Olá de novo, @${user.handle}!`;
+        }
+
+        persist();
+        await proc.done(800);
+        toast(welcome);
+        // O mascote comemora antes de a janela fechar
+        mascotSay('happy', signup ? 'Conta criada! Bem-vindo!' : 'Boa! Estás dentro!', 'hop');
+        if (!prefersReducedMotion()) await sleep(650);
+        $('authForm').reset();
+        hideModal('authModal');
+        renderAll();
+        const cb = afterAuth; afterAuth = null;
+        if (cb) cb();
+    } finally {
+        if (proc) proc.done(0); // garante que a animação nunca fica presa
+    }
+}
+
+// Pergunta primeiro (mascote surpreso) e só depois sai
+async function confirmLogout() {
+    closeMenus();
+    const ok = await askConfirm(
+        'Tens a certeza que queres sair?',
+        'Vais precisar de entrar outra vez para publicar, curtir e comentar.',
+        'Sim, sair',
+        { pose: 'surprised', cancelLabel: 'Ficar' }
+    );
+    if (!ok) return;
+    const proc = startProcessing('A terminar a sessão');
+    await proc.done(750, () => logout());
+}
+
+function logout() {
+    db.session = null;
+    persist();
+    closeMenus();
+    if (['following', 'saved'].includes(view.name)) location.hash = '#/';
+    renderAll();
+    if (selectedPostId) renderDetail();
+    toast('Você saiu da conta.');
+}
+
+/* ---------- AÇÕES SOBRE OBRAS ---------- */
+function toggleLike(id) {
+    if (!requireLogin('Entre para curtir esta obra.', () => toggleLike(id))) return;
+    const p = getPost(id), m = me();
+    if (!p) return;
+    const i = p.likes.indexOf(m.key);
+    if (i >= 0) {
+        p.likes.splice(i, 1);
+    } else {
+        p.likes.push(m.key);
+        notify(p.authorKey, 'like', m.key, p.id);
+    }
+    persist();
+    renderGrid();
+    if (profileIsShown()) renderProfileHeader();
+    if (selectedPostId === id) renderDetail(true);
+    renderNotifBadge();
+}
+
+function toggleBookmark(id) {
+    if (!requireLogin('Entre para salvar obras.', () => toggleBookmark(id))) return;
+    const m = me();
+    const i = m.bookmarks.indexOf(id);
+    if (i >= 0) m.bookmarks.splice(i, 1); else m.bookmarks.push(id);
+    toast(i >= 0 ? 'Removido dos salvos.' : 'Salvo nos seus favoritos!');
+    persist();
+    renderGrid();
+    if (selectedPostId === id) renderDetail(true);
+}
+
+function toggleFollow(key) {
+    if (!requireLogin('Entre para seguir artistas.', () => toggleFollow(key))) return;
+    const m = me();
+    if (m.key === key) return;
+    const i = m.following.indexOf(key);
+    if (i >= 0) {
+        m.following.splice(i, 1);
+    } else {
+        m.following.push(key);
+        notify(key, 'follow', m.key, null);
+    }
+    persist();
+    renderAll();
+    if (selectedPostId) renderDetail(true);
+}
+
+function addComment(text) {
+    const p = getPost(selectedPostId), m = me();
+    if (!p || !m) return;
+    const parent = replyingTo ? p.comments.find(c => c.id === replyingTo) : null;
+    p.comments.push({ id: uid(), authorKey: m.key, text, createdAt: Date.now(), replyTo: parent ? parent.id : null });
+    if (parent) notify(parent.authorKey, 'reply', m.key, p.id);
+    if (!parent || parent.authorKey !== p.authorKey) notify(p.authorKey, 'comment', m.key, p.id);
+    replyingTo = null;
+    persist();
+    renderDetail(true);
+    renderGrid();
+    const list = $('commentsList');
+    list.scrollTop = list.scrollHeight;
+}
+
+async function deleteComment(commentId) {
+    const p = getPost(selectedPostId);
+    if (!p) return;
+    if (!(await askConfirm('Apagar comentário?', 'Esta ação não pode ser desfeita.', 'Apagar'))) return;
+    p.comments = p.comments.filter(c => c.id !== commentId);
+    persist();
+    renderDetail(true);
+    renderGrid();
+}
+
+async function deletePost(id) {
+    const p = getPost(id);
+    if (!p) return;
+    if (!(await askConfirm('Queres mesmo apagar esta obra?', 'A obra e os seus comentários serão removidos para sempre.', 'Apagar', { pose: 'worried', cancelLabel: 'Não, manter' }))) return;
+    const proc = startProcessing('A apagar a publicação');
+    p.images.forEach(dropImage);
+    db.posts = db.posts.filter(x => x.id !== id);
+    db.notifications = db.notifications.filter(n => n.postId !== id);
+    Object.values(db.users).forEach(u => { u.bookmarks = u.bookmarks.filter(b => b !== id); });
+    persist();
+    await proc.done(600);
+    toast('Publicação apagada.');
+    closeDetail();
+    renderAll();
+}
+
+function sharePost(id) {
+    const url = location.href.split('#')[0] + '#/obra/' + id;
+    const p = getPost(id);
+    if (navigator.share) {
+        navigator.share({ title: p ? p.title : 'Bédia', url }).catch(() => {});
+        return;
+    }
+    const fallback = () => window.prompt('Copie o link:', url);
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).then(() => toast('Link copiado!'), fallback);
+    } else fallback();
+}
+
+function openReport(id) {
+    if (!requireLogin('Entre para denunciar uma publicação.', () => openReport(id))) return;
+    reportPostId = id;
+    $('reportForm').reset();
+    openModal('reportModal');
+}
+
+/* ---------- PUBLICAR / EDITAR ---------- */
+function handlePublish() {
+    if (!requireLogin('Você precisa estar logado para publicar no Bédia!', handlePublish)) return;
+    openPublish(null);
+}
+
+function openPublish(postId) {
+    editingPostId = postId;
+    draft = [];
+    editOrder = [];
+    $('publishForm').reset();
+    showError($('publishError'), '');
+    setPublishStatus('');
+    const editing = !!postId;
+    $('publishTitleText').textContent = editing ? 'Editar publicação' : 'Nova Publicação no Bédia';
+    $('publishSubmitBtn').querySelector('span').textContent = editing ? 'Guardar alterações' : 'Publicar no Bédia';
+    $('dropZone').classList.toggle('hidden', editing);
+    $('termsGroup').classList.toggle('hidden', editing);
+    $('imagesLabel').textContent = editing
+        ? 'Páginas (clique na estrela ⭐ para escolher a capa)'
+        : 'Imagens ou PDF (clique na estrela ⭐ para escolher a capa) *';
+
+    if (editing) {
+        const p = getPost(postId);
+        editOrder = p.images.slice();
+        $('postTitle').value = p.title;
+        $('postCategory').value = p.category;
+        $('postTags').value = p.tags.join(', ');
+        $('postDescription').value = p.description;
+        $('postNsfw').checked = !!p.nsfw;
+    }
+    renderThumbs();
+    openModal('publishModal');
+}
+
+function renderThumbs() {
+    const strip = $('thumbStrip');
+    const editing = !!editingPostId;
+    const list = editing ? editOrder.map(imgSrc) : draft;
+    strip.innerHTML = list.map((src, i) => {
+        const star = `<button type="button" data-action="thumb-make-cover" data-idx="${i}" aria-label="Usar como capa" title="Usar como capa" class="star" ${i === 0 ? 'disabled style="opacity:.3"' : ''}><i class="fa-solid fa-star"></i></button>`;
+        const bar = editing
+            ? star
+            : `<button type="button" data-action="thumb-left" data-idx="${i}" aria-label="Mover para a esquerda" ${i === 0 ? 'disabled style="opacity:.3"' : ''}><i class="fa-solid fa-chevron-left"></i></button>
+               ${star}
+               <button type="button" data-action="thumb-remove" data-idx="${i}" aria-label="Remover" class="danger"><i class="fa-solid fa-trash"></i></button>
+               <button type="button" data-action="thumb-right" data-idx="${i}" aria-label="Mover para a direita" ${i === list.length - 1 ? 'disabled style="opacity:.3"' : ''}><i class="fa-solid fa-chevron-right"></i></button>`;
+        return `
+        <div class="thumb">
+            <img src="${src}" alt="Página ${i + 1}">
+            ${i === 0 ? '<span class="thumb-cover">Capa</span>' : ''}
+            <div class="thumb-bar ${editing ? 'single' : ''}">${bar}</div>
+        </div>`;
+    }).join('');
+}
+
+const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+
+// Mensagem neutra (não é erro): progresso da conversão, dicas
+function setPublishStatus(msg) {
+    const el = $('publishStatus');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.toggle('hidden', !msg);
+}
+
+async function handleFiles(fileList) {
+    const files = [...fileList];
+    if (!files.length || converting) return;
+    const err = $('publishError');
+    showError(err, '');
+    let skipped = 0, full = false, cut = false, usedPdf = false;
+    converting = true;
+    const procFiles = startProcessing('A preparar as tuas páginas', { delay: 350 });
+    try {
+        for (const file of files) {
+            if (draft.length >= MAX_IMAGES) { full = true; break; }
+
+            if (isPdf(file)) {
+                if (file.size > MAX_PDF_MB * 1024 * 1024) { skipped++; continue; }
+                try {
+                    const res = await pdfToImages(file, MAX_IMAGES - draft.length,
+                        (n, t) => { setPublishStatus(`A converter o PDF… página ${n} de ${t}`); procFiles.update(`A converter o PDF… página ${n} de ${t}`); });
+                    draft.push(...res.pages);
+                    if (res.cut) cut = true;
+                    usedPdf = true;
+                    renderThumbs();
+                } catch (e) { skipped++; }
+                continue;
+            }
+
+            if (!file.type.startsWith('image/')) { skipped++; continue; }
+            if (file.size > MAX_FILE_MB * 1024 * 1024) { skipped++; continue; }
+            try { draft.push(await compressImage(file)); } catch (e) { skipped++; }
+        }
+    } finally {
+        converting = false;
+        setPublishStatus('');
+        await procFiles.done(400);
+    }
+
+    const msgs = [];
+    if (full) msgs.push(`Máximo de ${MAX_IMAGES} páginas por publicação.`);
+    if (cut) msgs.push(`O PDF tinha mais páginas: só entraram as primeiras (limite de ${MAX_IMAGES}).`);
+    if (skipped) msgs.push(`${skipped} ficheiro(s) ignorado(s): use imagens até ${MAX_FILE_MB} MB ou PDF até ${MAX_PDF_MB} MB.`);
+    if (msgs.length) showError(err, msgs.join(' '));
+
+    if (usedPdf && draft.length) {
+        if ($('postCategory').value === 'Ilustração 2D') $('postCategory').value = 'Mangá / Quadrinhos';
+        setPublishStatus('Dica: clique na estrela ⭐ de uma página para a escolher como capa.');
+    }
+    $('fileInput').value = '';
+    renderThumbs();
+}
+
+function parseTags(raw) {
+    return [...new Set(
+        raw.split(/[,\s]+/).map(t => t.replace(/^#/, '').trim().toLowerCase()).filter(t => t && t.length <= 24)
+    )].slice(0, 8);
+}
+
+async function submitPublish(e) {
+    e.preventDefault();
+    const err = $('publishError');
+    showError(err, '');
+    const m = me();
+    if (!m) return;
+
+    const title = $('postTitle').value.trim();
+    const category = $('postCategory').value;
+    const description = $('postDescription').value.trim();
+    const tags = parseTags($('postTags').value);
+    const nsfw = $('postNsfw').checked;
+
+    if (title.length < 2) return showError(err, 'Escreva um título para a obra.');
+
+    if (editingPostId) {
+        const p = getPost(editingPostId);
+        if (!p || p.authorKey !== m.key) return;
+        Object.assign(p, { title, category, description, tags, nsfw, editedAt: Date.now() });
+        if (editOrder.length === p.images.length) p.images = editOrder.slice(); // capa escolhida
+        const procEdit = startProcessing('A guardar as alterações');
+        persist();
+        await procEdit.done(500);
+        hideModal('publishModal');
+        toast('Alterações guardadas.');
+        renderAll();
+        if (selectedPostId === p.id) renderDetail();
+        return;
+    }
+
+    if (converting) return showError(err, 'Aguarde: o PDF ainda está a ser convertido.');
+    if (!draft.length) return showError(err, 'Adicione pelo menos uma imagem ou um PDF.');
+    if (!$('postTerms').checked) return showError(err, 'Confirme que a arte é sua para publicar.');
+
+    const btn = $('publishSubmitBtn');
+    btn.disabled = true;
+    const proc = startProcessing('A publicar a tua arte');
+    try {
+        const ids = [];
+        for (const src of draft) ids.push(await addImage(src));
+        const post = {
+            id: uid(), authorKey: m.key, title, category, description, tags, nsfw,
+            images: ids, createdAt: Date.now(), likes: [], comments: []
+        };
+        db.posts.unshift(post);
+        persist();
+        draft = [];
+        await proc.done(900);
+        hideModal('publishModal');
+        toast('Sua arte foi publicada no Bédia!');
+        if (view.name === 'saved' || view.name === 'following') location.hash = '#/';
+        activeCategory = 'Todos';
+        searchQuery = '';
+        syncSearchInputs();
+        renderAll();
+    } catch (ex) {
+        await proc.done(0);
+        showError(err, 'Não foi possível guardar. O armazenamento do navegador pode estar cheio.');
+    } finally {
+        proc.done(0);
+        btn.disabled = false;
+    }
+}
+
+/* ---------- PERFIL ---------- */
+const profileIsShown = () => view.name === 'profile';
+
+function renderProfileHeader() {
+    const box = $('profileHeader');
+    const u = getUser(view.arg);
+    if (!u) { box.innerHTML = ''; return; }
+    const m = me();
+    const own = m && m.key === u.key;
+    const works = db.posts.filter(p => p.authorKey === u.key);
+    const likesTotal = works.reduce((n, p) => n + p.likes.length, 0);
+    const followers = Object.values(db.users).filter(x => x.following.includes(u.key)).length;
+    const isFollowing = m && m.following.includes(u.key);
+    const link = /^https?:\/\//i.test(u.link) ? u.link : '';
+    const since = new Date(u.createdAt).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+
+    box.innerHTML = `
+        <div class="glass-card rounded-2xl p-5 md:p-7 flex flex-col sm:flex-row gap-5 sm:items-center">
+            ${avatarHTML(u, 'w-24 h-24', 'text-3xl')}
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center flex-wrap gap-3 mb-1">
+                    <h1 class="text-xl md:text-2xl font-black text-white truncate">@${esc(u.handle)}</h1>
+                    ${own
+                        ? `<button data-action="edit-profile" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-gray-200 px-4 py-1.5 rounded-full text-xs font-semibold"><i class="fa-solid fa-pen mr-1"></i> Editar perfil</button>`
+                        : `<button data-action="follow" data-user="${esc(u.key)}" class="${isFollowing ? 'bg-slate-800 border border-slate-700 text-gray-200' : 'bg-neonPurple hover:bg-neonPurpleHover text-white'} px-4 py-1.5 rounded-full text-xs font-bold">${isFollowing ? 'A seguir ✓' : '<i class="fa-solid fa-user-plus mr-1"></i> Seguir'}</button>`}
+                </div>
+                <p class="text-xs text-gray-300 leading-relaxed mb-2 break-words">${u.bio ? esc(u.bio) : '<span class="text-gray-500 italic">Este artista ainda não escreveu uma bio.</span>'}</p>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-500 mb-3">
+                    <span><i class="fa-regular fa-calendar mr-1"></i>Membro desde ${esc(since)}</span>
+                    ${link ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer nofollow" class="text-neonCyan hover:underline"><i class="fa-solid fa-link mr-1"></i>${esc(link.replace(/^https?:\/\//i, '').slice(0, 40))}</a>` : ''}
+                </div>
+                <div class="flex gap-6 text-xs">
+                    <div><b class="text-white text-sm">${works.length}</b> <span class="text-gray-400">obras</span></div>
+                    <div><b class="text-white text-sm">${followers}</b> <span class="text-gray-400">seguidores</span></div>
+                    <div><b class="text-white text-sm">${u.following.length}</b> <span class="text-gray-400">a seguir</span></div>
+                    <div><b class="text-white text-sm">${likesTotal}</b> <span class="text-gray-400">curtidas</span></div>
+                </div>
+            </div>
+        </div>`;
+}
+
+function openProfileEditor() {
+    const m = me();
+    if (!m) return openAuth('login');
+    closeMenus();
+    profileColor = m.color;
+    profileAvatarData = undefined;
+    $('pfBio').value = m.bio;
+    $('pfLink').value = m.link;
+    $('pfBioCount').textContent = `${m.bio.length}/160`;
+    showError($('pfError'), '');
+    buildColorPicker($('pfColors'), () => profileColor, c => { profileColor = c; paintProfilePreview(); });
+    paintProfilePreview();
+    openModal('profileModal');
+}
+
+function paintProfilePreview() {
+    const m = me();
+    const preview = { ...m, color: profileColor };
+    if (profileAvatarData === null) preview.avatarId = null;
+    let html = avatarHTML(preview, 'w-20 h-20', 'text-2xl');
+    if (typeof profileAvatarData === 'string') {
+        html = `<img src="${profileAvatarData}" alt="" class="w-20 h-20 rounded-full object-cover border border-white/10">`;
+    }
+    $('pfAvatarPreview').innerHTML = html;
+}
+
+async function submitProfile(e) {
+    e.preventDefault();
+    const m = me();
+    if (!m) return;
+    const err = $('pfError');
+    showError(err, '');
+    let link = $('pfLink').value.trim();
+    if (link && !/^https?:\/\//i.test(link)) link = 'https://' + link;
+    if (link && !/^https?:\/\/\S+\.\S+/i.test(link)) return showError(err, 'O link não parece válido.');
+
+    const procPf = startProcessing('A guardar o perfil');
+    m.bio = $('pfBio').value.trim().slice(0, 160);
+    m.link = link;
+    m.color = profileColor;
+    if (profileAvatarData === null) {
+        if (m.avatarId) dropImage(m.avatarId);
+        m.avatarId = null;
+    } else if (typeof profileAvatarData === 'string') {
+        const old = m.avatarId;
+        m.avatarId = await addImage(profileAvatarData);
+        if (old) dropImage(old);
+    }
+    persist();
+    await procPf.done(500);
+    hideModal('profileModal');
+    toast('Perfil atualizado.');
+    renderAll();
+    if (selectedPostId) renderDetail(true);
+}
+
+/* ---------- CÓPIA DE SEGURANÇA ---------- */
+function normalizeDb() {
+    db.users = db.users || {};
+    db.posts = db.posts || [];
+    db.notifications = db.notifications || [];
+    db.reports = db.reports || [];
+    Object.values(db.users).forEach(u => {
+        u.following = u.following || []; u.bookmarks = u.bookmarks || [];
+        u.bio = u.bio || ''; u.link = u.link || ''; u.avatarId = u.avatarId || null;
+    });
+    db.posts.forEach(p => {
+        p.likes = p.likes || []; p.comments = p.comments || [];
+        p.tags = p.tags || []; p.images = p.images || []; p.description = p.description || '';
+    });
+    if (db.session && !db.users[db.session]) db.session = null;
+}
+
+async function exportBackup() {
+    const proc = startProcessing('A preparar a cópia de segurança');
+    try {
+        const data = { app: 'bedia', version: 1, exportedAt: Date.now(), db, images: Object.fromEntries(images) };
+        const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'bedia-copia-' + new Date().toISOString().slice(0, 10) + '.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+        await proc.done(600);
+        toast('Cópia guardada no teu dispositivo.');
+    } catch (e) {
+        await proc.done(0);
+        toast('Não foi possível criar a cópia.', 'error');
+    }
+}
+
+async function importBackup(file) {
+    let data;
+    try { data = JSON.parse(await file.text()); } catch (e) { return toast('Esse ficheiro não é válido.', 'error'); }
+    if (!data || data.app !== 'bedia' || !data.db || typeof data.db.users !== 'object' || !Array.isArray(data.db.posts)) {
+        return toast('Esse ficheiro não é uma cópia do Bédia.', 'error');
+    }
+    const ok = await askConfirm(
+        'Importar esta cópia?',
+        'Isto substitui as contas e obras deste navegador pelas do ficheiro. Depois tens de entrar outra vez.',
+        'Importar',
+        { pose: 'surprised', cancelLabel: 'Cancelar' }
+    );
+    if (!ok) return;
+    const proc = startProcessing('A importar a cópia');
+    try {
+        await Promise.all([...images.keys()].map(id => Store.del('images', id)));
+        images.clear();
+        for (const [id, src] of Object.entries(data.images || {})) {
+            images.set(id, src);
+            await Store.put('images', id, src);
+        }
+        db = { users: {}, posts: [], notifications: [], reports: [], session: null };
+        db = Object.assign(db, data.db);
+        db.session = null;
+        normalizeDb();
+        await Store.put('meta', 'db', db);
+        await proc.done(800);
+        selectedPostId = null;
+        location.hash = '#/';
+        renderAll();
+        toast('Cópia importada. Já podes entrar com as tuas contas.');
+    } catch (e) {
+        await proc.done(0);
+        toast('Não foi possível importar a cópia.', 'error');
+    }
+}
+
+$('backupInput').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) importBackup(f);
+});
+
+/* ---------- APAGAR CONTA ---------- */
+async function deleteAccount() {
+    const m = me();
+    if (!m) return;
+    closeMenus();
+    const ok = await askConfirm(
+        'Queres mesmo apagar a tua conta?',
+        'As tuas obras, comentários, curtidas e seguidores serão removidos para sempre. Isto não pode ser desfeito.',
+        'Apagar conta',
+        { pose: 'worried', cancelLabel: 'Não, ficar' }
+    );
+    if (!ok) return;
+    const proc = startProcessing('A apagar a conta');
+    const key = m.key;
+    const mine = db.posts.filter(p => p.authorKey === key);
+    const gone = new Set(mine.map(p => p.id));
+    mine.forEach(p => p.images.forEach(dropImage));
+    db.posts = db.posts.filter(p => p.authorKey !== key);
+    db.posts.forEach(p => {
+        p.comments = p.comments.filter(c => c.authorKey !== key);
+        p.likes = p.likes.filter(k => k !== key);
+    });
+    db.notifications = db.notifications.filter(n => n.toKey !== key && n.fromKey !== key && !gone.has(n.postId));
+    Object.values(db.users).forEach(u => {
+        u.following = u.following.filter(k => k !== key);
+        u.bookmarks = u.bookmarks.filter(b => !gone.has(b));
+    });
+    if (m.avatarId) dropImage(m.avatarId);
+    delete db.users[key];
+    db.session = null;
+    persist();
+    await proc.done(900);
+    location.hash = '#/';
+    renderAll();
+    toast('A tua conta foi apagada.');
+}
+
+/* ---------- RESPONDER A COMENTÁRIOS ---------- */
+function updateReplyBar() {
+    const bar = $('replyBar');
+    const p = getPost(selectedPostId);
+    const c = replyingTo && p ? p.comments.find(x => x.id === replyingTo) : null;
+    if (!c) replyingTo = null;
+    setFlex(bar, !!c);
+    if (c) {
+        const u = getUser(c.authorKey);
+        $('replyBarText').textContent = '@' + (u ? u.handle : 'desconhecido');
+    }
+}
+
+/* ---------- LEITOR: vertical, ecrã inteiro, última página, toques ---------- */
+const lastPages = LS.get('bedia:lastPage', {});
+function lastPageOf(id, total) {
+    const n = +lastPages[id];
+    return Number.isInteger(n) && n > 0 && n < total ? n : 0;
+}
+function saveLastPage(id, n) {
+    if (n > 0) lastPages[id] = n; else delete lastPages[id];
+    LS.set('bedia:lastPage', lastPages);
+}
+
+function toggleReaderMode() {
+    readerMode = readerMode === 'scroll' ? 'page' : 'scroll';
+    LS.set('bedia:readerMode', readerMode);
+    renderDetail(true);
+    $('detailViewer').scrollTop = 0;
+    toast(readerMode === 'scroll' ? 'Leitura vertical.' : 'Leitura página a página.');
+}
+
+// O leitor muda-se para o <body> em ecrã inteiro (a janela da obra tem um efeito de vidro
+// que impediria "position: fixed" de cobrir o ecrã todo).
+function enterReaderFull() {
+    const pane = $('readerPane');
+    if (readerFull || !pane) return;
+    readerHome = document.createComment('leitor');
+    pane.parentNode.insertBefore(readerHome, pane);
+    document.body.appendChild(pane);
+    pane.classList.add('reader-full');
+    readerFull = true;
+    if (pane.requestFullscreen) pane.requestFullscreen().then(() => { readerRealFs = true; }).catch(() => {});
+    paintReaderTools();
+}
+
+function exitReaderFull() {
+    const pane = $('readerPane');
+    if (!readerFull || !pane) return;
+    readerFull = false;
+    pane.classList.remove('reader-full');
+    if (readerHome && readerHome.parentNode) readerHome.parentNode.replaceChild(pane, readerHome);
+    readerHome = null;
+    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    readerRealFs = false;
+    paintReaderTools();
+}
+
+function toggleReaderFull() { if (readerFull) exitReaderFull(); else enterReaderFull(); }
+
+document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && readerRealFs && readerFull) exitReaderFull();
+});
+
+function paintReaderTools() {
+    const p = getPost(selectedPostId);
+    const multi = !!p && p.images.length > 1;
+    const modeBtn = $('readerModeBtn');
+    setFlex(modeBtn, multi);
+    modeBtn.innerHTML = readerMode === 'scroll' ? '<i class="fa-solid fa-book-open"></i>' : '<i class="fa-solid fa-scroll"></i>';
+    const label = readerMode === 'scroll' ? 'Ler página a página' : 'Ler na vertical';
+    modeBtn.setAttribute('aria-label', label);
+    modeBtn.title = label;
+    const fullBtn = $('readerFullBtn');
+    fullBtn.innerHTML = readerFull ? '<i class="fa-solid fa-compress"></i>' : '<i class="fa-solid fa-expand"></i>';
+    fullBtn.setAttribute('aria-label', readerFull ? 'Sair do ecrã inteiro' : 'Ecrã inteiro');
+    fullBtn.title = readerFull ? 'Sair do ecrã inteiro' : 'Ecrã inteiro';
+}
+
+// Tocar nos lados da página ou deslizar passa de página
+(function readerGestures() {
+    const viewer = $('detailViewer');
+    let sx = 0, sy = 0, swiped = false;
+    viewer.addEventListener('touchstart', (e) => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; }, { passive: true });
+    viewer.addEventListener('touchend', (e) => {
+        if (readerMode !== 'page') return;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - sx, dy = t.clientY - sy;
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+            swiped = true;
+            pageDelta(dx < 0 ? 1 : -1);
+            setTimeout(() => { swiped = false; }, 350);
+        }
+    }, { passive: true });
+    viewer.addEventListener('click', (e) => {
+        if (swiped || readerMode !== 'page' || e.target.tagName !== 'IMG') return;
+        const p = getPost(selectedPostId);
+        if (!p || p.images.length < 2) return;
+        const r = e.target.getBoundingClientRect();
+        const x = (e.clientX - r.left) / r.width;
+        if (x < 0.3) pageDelta(-1); else if (x > 0.7) pageDelta(1);
+    });
+})();
+
+/* ---------- CARREGAR MAIS AO ROLAR ---------- */
+(function infiniteScroll() {
+    const wrap = $('loadMoreWrap');
+    if (!wrap || !('IntersectionObserver' in window)) return;
+    let busy = false;
+    const io = new IntersectionObserver((entries) => {
+        if (busy || !entries.some(e => e.isIntersecting)) return;
+        busy = true;
+        io.unobserve(wrap);
+        visibleCount += PAGE_SIZE;
+        renderGrid();
+        requestAnimationFrame(() => { busy = false; io.observe(wrap); });
+    }, { rootMargin: '400px 0px' });
+    io.observe(wrap);
+})();
+
+/* ---------- NOTIFICAÇÕES ---------- */
+function myNotifs() {
+    const m = me();
+    return m ? db.notifications.filter(n => n.toKey === m.key) : [];
+}
+
+function renderNotifBadge() {
+    const unread = myNotifs().filter(n => !n.read).length;
+    const b = $('notifBadge');
+    b.textContent = unread > 9 ? '9+' : unread;
+    setFlex(b, unread > 0);
+}
+
+function notifText(n) {
+    const from = getUser(n.fromKey);
+    const who = `<b class="text-white">@${esc(from ? from.handle : 'alguém')}</b>`;
+    const p = n.postId ? getPost(n.postId) : null;
+    const t = p ? `«${esc(p.title)}»` : '';
+    if (n.type === 'like') return `${who} curtiu a sua obra ${t}`;
+    if (n.type === 'comment') return `${who} comentou em ${t}`;
+    if (n.type === 'reply') return `${who} respondeu ao seu comentário em ${t}`;
+    return `${who} começou a seguir você`;
+}
+
+function toggleNotifPanel() {
+    const panel = $('notifPanel');
+    const open = panel.classList.contains('hidden');
+    closeMenus();
+    if (!open) return;
+    const list = myNotifs().slice(0, 25);
+    $('notifList').innerHTML = list.length
+        ? list.map(n => `
+            <button class="notif-item ${n.read ? '' : 'unread'}" data-action="open-notif" data-id="${n.id}">
+                ${avatarHTML(getUser(n.fromKey), 'w-8 h-8', 'text-[11px]')}
+                <span class="flex-1 min-w-0"><span class="block leading-snug">${notifText(n)}</span><span class="text-[10px] text-gray-500">${timeAgo(n.createdAt)}</span></span>
+            </button>`).join('')
+        : '<p class="px-4 py-8 text-center text-xs text-gray-500">Ainda não há notificações.</p>';
+    panel.classList.remove('hidden');
+    myNotifs().forEach(n => { n.read = true; });
+    persist();
+    renderNotifBadge();
+}
+
+function closeMenus() {
+    $('notifPanel').classList.add('hidden');
+    $('userMenu').classList.add('hidden');
+}
+
+/* ---------- RENDERIZAÇÃO: CABEÇALHO ---------- */
+function renderHeader() {
+    const m = me();
+    $('loginBtn').classList.toggle('hidden', !!m);
+    setFlex($('loggedBox'), !!m);
+    if (m) {
+        $('userMenuAvatar').innerHTML = avatarHTML(m, 'w-9 h-9', 'text-xs');
+        $('userMenuName').textContent = '@' + m.handle;
+        $('userMenuEmail').textContent = m.email;
+        renderNotifBadge();
+    }
+}
+
+/* ---------- RENDERIZAÇÃO: FEED ---------- */
+function visiblePosts() {
+    const m = me();
+    let list = db.posts.slice();
+
+    if (view.name === 'following') list = m ? list.filter(p => m.following.includes(p.authorKey)) : [];
+    else if (view.name === 'saved') list = m ? list.filter(p => m.bookmarks.includes(p.id)) : [];
+    else if (view.name === 'profile') list = list.filter(p => p.authorKey === view.arg);
+
+    if (view.name !== 'profile' && activeCategory !== 'Todos') list = list.filter(p => p.category === activeCategory);
+
+    const q = searchQuery.toLowerCase().replace(/^#/, '');
+    if (q) {
+        list = list.filter(p => {
+            const a = getUser(p.authorKey);
+            return p.title.toLowerCase().includes(q)
+                || p.description.toLowerCase().includes(q)
+                || (a && a.handle.toLowerCase().includes(q))
+                || p.tags.some(t => t.includes(q));
+        });
+    }
+
+    const sort = $('sortSelect').value;
+    if (sort === 'popular') list.sort((a, b) => b.likes.length - a.likes.length || b.createdAt - a.createdAt);
+    else if (sort === 'discussed') list.sort((a, b) => b.comments.length - a.comments.length || b.createdAt - a.createdAt);
+    else list.sort((a, b) => b.createdAt - a.createdAt);
+    return list;
+}
+
+// Cartão no estilo Pinterest: imagem com cantos redondos e proporção original,
+// "Salvar" ao passar o rato, e por baixo só título + autor + curtidas.
+function postCard(p) {
+    const a = getUser(p.authorKey), m = me();
+    const liked = m && p.likes.includes(m.key);
+    const saved = m && m.bookmarks.includes(p.id);
+    const blur = p.nsfw && !revealed.has(p.id);
+    return `
+    <div class="masonry-item">
+        <article class="pin group" data-action="open-post" data-id="${p.id}" tabindex="0" aria-label="${esc(p.title)}">
+            <div class="pin-media">
+                <img src="${imgSrc(p.images[0])}" loading="lazy" decoding="async" alt="${esc(p.title)}" class="pin-img ${seenImgs.has(p.id) ? 'loaded' : ''} ${blur ? 'nsfw-blur' : ''}" onload="this.classList.add('loaded'); seenImgs.add('${p.id}')">
+
+                ${p.images.length > 1 ? `<span class="pin-count"><i class="fa-regular fa-images"></i>${p.images.length}</span>` : ''}
+
+                ${blur ? `
+                <div class="pin-nsfw">
+                    <i class="fa-solid fa-eye-slash text-xl text-white mb-1"></i>
+                    <span class="text-xs font-bold text-white">Conteúdo sensível</span>
+                    <span class="text-[10px] text-gray-300">Toque para ver</span>
+                </div>` : `
+                <div class="pin-hover">
+                    <span class="pin-cat">${esc(CATEGORY_LABEL[p.category] || p.category)}</span>
+                    <button data-action="bookmark" data-id="${p.id}" aria-label="${saved ? 'Remover dos salvos' : 'Salvar'}" class="pin-save ${saved ? 'saved' : ''}">
+                        <i class="${saved ? 'fa-solid' : 'fa-regular'} fa-bookmark"></i><span>${saved ? 'Salvo' : 'Salvar'}</span>
+                    </button>
+                </div>`}
+            </div>
+
+            <div class="pin-info">
+                <h3 class="pin-title">${esc(p.title)}</h3>
+                <div class="pin-meta">
+                    <button data-action="open-profile" data-user="${esc(p.authorKey)}" class="pin-author">
+                        ${avatarHTML(a, 'w-6 h-6', 'text-[10px]')}
+                        <span>@${esc(a ? a.handle : 'desconhecido')}</span>
+                    </button>
+                    <span class="pin-stats">
+                        <span><i class="fa-regular fa-comment"></i>${p.comments.length}</span>
+                        <button data-action="like" data-id="${p.id}" aria-label="Curtir" class="pin-like ${liked ? 'liked' : ''}">
+                            <i class="${liked ? 'fa-solid' : 'fa-regular'} fa-heart"></i><span>${p.likes.length}</span>
+                        </button>
+                    </span>
+                </div>
+            </div>
+        </article>
+    </div>`;
+}
+
+function emptyConfig() {
+    const m = me();
+    const filtering = searchQuery || (view.name !== 'profile' && activeCategory !== 'Todos');
+    if (filtering) return { icon: 'fa-magnifying-glass', title: 'Nada encontrado', text: 'Tente outra pesquisa ou outra categoria.', btn: 'Limpar filtros', act: 'clear-filters' };
+    if (view.name === 'following') {
+        return m && m.following.length
+            ? { icon: 'fa-user-group', title: 'Sem novidades', text: 'Os artistas que você segue ainda não publicaram.', btn: 'Explorar artistas', act: 'go-home' }
+            : { icon: 'fa-user-group', title: 'Você ainda não segue ninguém', text: 'Siga artistas para ver aqui as obras deles.', btn: 'Explorar artistas', act: 'go-home' };
+    }
+    if (view.name === 'saved') return { icon: 'fa-bookmark', title: 'Nada salvo ainda', text: 'Toque no marcador de uma obra para a guardar aqui.', btn: 'Explorar obras', act: 'go-home' };
+    if (view.name === 'profile') {
+        const own = m && m.key === view.arg;
+        return own
+            ? { icon: 'fa-pen-nib', title: 'Você ainda não publicou', text: 'Mostre a sua primeira arte à comunidade!', btn: 'Publicar agora', act: 'publish' }
+            : { icon: 'fa-ghost', title: 'Sem obras por aqui', text: 'Este artista ainda não publicou nada.', btn: 'Explorar obras', act: 'go-home' };
+    }
+    return { icon: 'fa-ghost', title: 'Ainda não há publicações', text: 'Seja o primeiro a publicar a sua arte no Bédia!', btn: 'Publicar agora', act: 'publish' };
+}
+
+function renderGrid() {
+    const list = visiblePosts();
+    const shown = list.slice(0, visibleCount);
+    $('artMasonryGrid').innerHTML = shown.map(postCard).join('');
+
+    const empty = list.length === 0;
+    $('emptyState').classList.toggle('hidden', !empty);
+    if (empty) {
+        const c = emptyConfig();
+        $('emptyIcon').className = `fa-solid ${c.icon}`;
+        $('emptyTitle').textContent = c.title;
+        $('emptyText').textContent = c.text;
+        $('emptyAction').textContent = c.btn;
+        $('emptyAction').dataset.action = c.act;
+    }
+    $('loadMoreWrap').classList.toggle('hidden', list.length <= visibleCount);
+
+    const info = $('filterInfo');
+    const bits = [];
+    if (searchQuery) bits.push(`pesquisa "<b class="text-white">${esc(searchQuery)}</b>"`);
+    if (view.name !== 'profile' && activeCategory !== 'Todos') bits.push(`categoria <b class="text-white">${esc(CATEGORY_LABEL[activeCategory] || activeCategory)}</b>`);
+    setFlex(info, bits.length > 0);
+    info.innerHTML = bits.length
+        ? `<span>${list.length} resultado(s) · ${bits.join(' · ')}</span> <button data-action="clear-filters" class="text-neonCyan hover:underline">limpar</button>`
+        : '';
+}
+
+function renderChrome() {
+    const isHome = view.name === 'home';
+    const isProfile = view.name === 'profile';
+
+    $('heroSection').classList.toggle('hidden', !isHome || !!searchQuery || activeCategory !== 'Todos');
+    $('profileHeader').classList.toggle('hidden', !isProfile);
+    $('viewTabs').classList.toggle('hidden', isProfile);
+    $('categoryContainer').classList.toggle('hidden', isProfile);
+
+    document.querySelectorAll('#viewTabs .view-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === view.name));
+    document.querySelectorAll('.category-btn').forEach(b => b.classList.toggle('active', b.dataset.category === activeCategory));
+
+    if (isProfile) renderProfileHeader();
+
+    const titles = { home: '', following: 'Seguindo · ', saved: 'Salvos · ' };
+    const u = isProfile ? getUser(view.arg) : null;
+    document.title = (isProfile && u ? `@${u.handle} · ` : (titles[view.name] || '')) + 'Bédia - Mangá e Arte Otaku';
+}
+
+function renderAll() {
+    renderHeader();
+    renderChrome();
+    renderGrid();
+}
+
+function syncSearchInputs() {
+    $('searchInput').value = searchQuery;
+    $('mobileSearchInput').value = searchQuery;
+    hideSuggestions();
+    updateClearBtn();
+}
+
+/* ---------- RENDERIZAÇÃO: DETALHE DA OBRA ---------- */
+function openDetail(id) {
+    const p = getPost(id);
+    if (!p) return;
+    selectedPostId = id;
+    replyingTo = null;
+    const last = lastPageOf(id, p.images.length);
+    pageIndex = last;
+    renderDetail(true);
+    openModal('detailModal');
+    $('detailViewer').scrollTop = 0;
+    if (last > 0 && readerMode === 'page') toast(`Continuas de onde ficaste: página ${last + 1}.`);
+    document.title = p.title + ' · Bédia';
+}
+
+// Abrir uma obra cria UMA entrada no histórico; fechar volta atrás nessa entrada.
+// (Antes, fechar substituía a entrada por uma cópia da lista e o botão "voltar" ficava preso.)
+let afterDetailClose = null;
+let detailBackPending = false;
+
+function openPostRoute(id) {
+    const target = '#/obra/' + id;
+    if (location.hash === target) return;
+    history.pushState({ bedia: 'obra' }, '', target);
+    route();
+}
+
+function closeDetail(after) {
+    const wasOpen = selectedPostId !== null || !$('detailModal').classList.contains('hidden');
+    if (!$('detailModal').classList.contains('hidden')) hideModal('detailModal');
+    selectedPostId = null;
+
+    if (wasOpen && location.hash.startsWith('#/obra/')) {
+        if (history.state && history.state.bedia === 'obra') {
+            afterDetailClose = after || null;
+            detailBackPending = true;
+            history.back();            // volta de verdade à página anterior
+            renderChrome();
+            return;
+        }
+        history.replaceState(null, '', lastRouteHash); // abriu por link direto: não há "anterior" nossa
+        renderChrome();
+    }
+    if (after) after();
+}
+
+function renderDetail(keepPage = false) {
+    const p = getPost(selectedPostId);
+    if (!p) return closeDetail();
+    const m = me();
+    const a = getUser(p.authorKey);
+    if (!keepPage) pageIndex = 0;
+    pageIndex = Math.min(pageIndex, p.images.length - 1);
+
+    $('detailBadgeCategory').textContent = CATEGORY_LABEL[p.category] || p.category;
+    $('detailTitle').textContent = p.title;
+    $('detailDescription').textContent = p.description || 'Sem descrição.';
+    $('detailMeta').textContent = timeAgo(p.createdAt) + (p.editedAt ? ' · editado' : '');
+
+    const iFollow = m && a && m.following.includes(a.key);
+    $('detailAuthor').innerHTML = `
+        <div class="flex items-center gap-2.5">
+            <button data-action="open-profile" data-user="${esc(p.authorKey)}" class="flex items-center gap-2.5 min-w-0 hover:opacity-80 text-left">
+                ${avatarHTML(a, 'w-9 h-9', 'text-xs')}
+                <span class="min-w-0"><span class="block font-bold text-white text-xs truncate">@${esc(a ? a.handle : 'desconhecido')}</span><span class="text-[11px] text-neonCyan">Ver perfil</span></span>
+            </button>
+            ${a && (!m || m.key !== a.key) ? `<button data-action="follow" data-user="${esc(a.key)}" class="${iFollow ? 'bg-slate-800 border border-slate-700 text-gray-200' : 'bg-neonPurple text-white'} px-3 py-1 rounded-full text-[11px] font-bold">${iFollow ? 'A seguir ✓' : 'Seguir'}</button>` : ''}
+        </div>`;
+
+    $('detailTags').innerHTML = p.tags.map(t =>
+        `<button data-action="tag" data-tag="${esc(t)}" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-purple-300 px-2 py-0.5 rounded-full border border-slate-700">#${esc(t)}</button>`
+    ).join('');
+
+    // Imagem / leitor
+    const blur = p.nsfw && !revealed.has(p.id);
+    const multi = p.images.length > 1;
+    const scrollMode = multi && readerMode === 'scroll' && !blur;
+    const viewer = $('detailViewer');
+    viewer.classList.toggle('scroll-mode', scrollMode);
+    const revealBtn = blur ? `<button data-action="reveal" class="absolute inset-0 flex flex-col items-center justify-center bg-black/50 text-white">
+            <i class="fa-solid fa-eye-slash text-2xl mb-2"></i><span class="text-sm font-bold">Conteúdo sensível</span><span class="text-xs text-gray-300">Clique para ver</span></button>` : '';
+    viewer.innerHTML = scrollMode
+        ? `<div class="reader-strip">${p.images.map((imgId, i) => `<img src="${imgSrc(imgId)}" alt="${esc(p.title)} - página ${i + 1}" loading="lazy" decoding="async">`).join('')}</div>`
+        : `<img src="${imgSrc(p.images[pageIndex])}" alt="${esc(p.title)} - página ${pageIndex + 1}" class="max-h-[70vh] max-w-full object-contain ${blur ? 'nsfw-blur' : ''}">${revealBtn}`;
+
+    setFlex($('detailPager'), multi && !scrollMode);
+    if (multi && !scrollMode) {
+        $('pageIndicator').textContent = `Página ${pageIndex + 1} de ${p.images.length}`;
+        $('pagePrev').disabled = pageIndex === 0;
+        $('pageNext').disabled = pageIndex === p.images.length - 1;
+    }
+
+    // Ações
+    const liked = m && p.likes.includes(m.key);
+    const saved = m && m.bookmarks.includes(p.id);
+    const own = m && m.key === p.authorKey;
+    $('detailActions').innerHTML = `
+        <div class="flex items-center gap-4">
+            <button data-action="like" data-id="${p.id}" class="flex items-center gap-1.5 text-gray-400 hover:text-neonPink transition-colors" aria-label="Curtir">
+                <i class="${liked ? 'fa-solid text-neonPink pop' : 'fa-regular'} fa-heart text-base"></i>
+                <span class="text-xs font-bold text-gray-300">${p.likes.length}</span>
+            </button>
+            <button data-action="bookmark" data-id="${p.id}" class="flex items-center gap-1.5 text-gray-400 hover:text-neonCyan transition-colors">
+                <i class="${saved ? 'fa-solid text-neonCyan' : 'fa-regular'} fa-bookmark text-base"></i>
+                <span class="text-xs font-semibold text-gray-300">${saved ? 'Salvo' : 'Salvar'}</span>
+            </button>
+            <button data-action="share" data-id="${p.id}" class="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors">
+                <i class="fa-solid fa-share-nodes text-base"></i><span class="text-xs font-semibold text-gray-300">Partilhar</span>
+            </button>
+        </div>
+        <div class="flex items-center gap-3 text-xs">
+            ${own
+                ? `<button data-action="edit-post" data-id="${p.id}" class="text-gray-300 hover:text-white"><i class="fa-solid fa-pen mr-1"></i>Editar</button>
+                   <button data-action="delete-post" data-id="${p.id}" class="text-pink-300 hover:text-pink-200"><i class="fa-solid fa-trash mr-1"></i>Apagar</button>`
+                : `<button data-action="report" data-id="${p.id}" class="text-gray-500 hover:text-pink-300" title="Denunciar"><i class="fa-regular fa-flag mr-1"></i>Denunciar</button>`}
+        </div>`;
+
+    // Comentários
+    $('commentCount').textContent = p.comments.length;
+    $('commentsList').innerHTML = p.comments.length
+        ? p.comments.map(c => {
+            const ca = getUser(c.authorKey);
+            const canDelete = m && (m.key === c.authorKey || m.key === p.authorKey);
+            const parent = c.replyTo ? p.comments.find(x => x.id === c.replyTo) : null;
+            const pa = parent ? getUser(parent.authorKey) : null;
+            return `
+            <div class="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800 flex gap-2 ${parent ? 'ml-5' : ''}">
+                ${avatarHTML(ca, 'w-6 h-6', 'text-[10px]')}
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center justify-between gap-2 mb-0.5">
+                        <button data-action="open-profile" data-user="${esc(c.authorKey)}" class="text-xs font-bold text-neonCyan hover:underline truncate">@${esc(ca ? ca.handle : 'desconhecido')}</button>
+                        <span class="text-[9px] text-gray-500 shrink-0">${timeAgo(c.createdAt)}${canDelete ? ` <button data-action="delete-comment" data-id="${c.id}" aria-label="Apagar comentário" class="ml-1 text-gray-500 hover:text-pink-300"><i class="fa-solid fa-trash-can"></i></button>` : ''}</span>
+                    </div>
+                    ${parent ? `<div class="text-[10px] text-gray-500 mb-0.5"><i class="fa-solid fa-reply mr-1"></i>em resposta a @${esc(pa ? pa.handle : 'desconhecido')}</div>` : ''}
+                    <p class="text-xs text-gray-300 leading-snug break-words">${esc(c.text)}</p>
+                    <button type="button" data-action="reply-comment" data-id="${c.id}" class="text-[10px] text-gray-500 hover:text-neonCyan mt-1">Responder</button>
+                </div>
+            </div>`;
+        }).join('')
+        : '<p class="text-xs text-gray-500 italic py-2">Ainda ninguém comentou. Seja a primeira pessoa!</p>';
+
+    const input = $('commentInput');
+    input.placeholder = m ? 'Escreva seu comentário...' : 'Entre para comentar...';
+    input.readOnly = !m;
+    updateReplyBar();
+    paintReaderTools();
+}
+
+function pageDelta(d) {
+    const p = getPost(selectedPostId);
+    if (!p) return;
+    if (readerMode === 'scroll' && p.images.length > 1) return; // na leitura vertical não há páginas
+    const n = pageIndex + d;
+    if (n < 0 || n >= p.images.length) return;
+    pageIndex = n;
+    saveLastPage(p.id, n);
+    renderDetail(true);
+}
+
+/* ---------- TEXTOS LEGAIS ---------- */
+const LEGAL = {
+    termos: {
+        title: 'Termos de Uso',
+        html: `
+            <p><b class="text-white">1. A sua arte é sua.</b> Só publique trabalhos que criou ou que tem autorização para partilhar. Arte roubada ou copiada será removida e a conta pode ser suspensa.</p>
+            <p><b class="text-white">2. Respeito.</b> Não é permitido ódio, assédio, ameaças, conteúdo ilegal ou qualquer conteúdo que envolva menores de forma imprópria.</p>
+            <p><b class="text-white">3. Conteúdo sensível.</b> Obras com nudez ou violência explícita devem ser marcadas como "conteúdo sensível". Quem não marcar pode ter a obra removida.</p>
+            <p><b class="text-white">4. Direitos.</b> Você mantém todos os direitos sobre a sua arte. Ao publicar, autoriza o Bédia a exibi-la na plataforma.</p>
+            <p><b class="text-white">5. Remoções.</b> Se acredita que uma obra viola os seus direitos, use o botão "Denunciar" ou fale com o suporte.</p>
+            <p class="text-gray-500">Versão provisória · Atualizado em outubro de 2026.</p>`
+    },
+    privacidade: {
+        title: 'Política de Privacidade',
+        html: `
+            <p><b class="text-white">Que dados guardamos.</b> Nome de utilizador, e-mail, bio, foto e as obras, comentários e curtidas que você faz.</p>
+            <p><b class="text-white">Para que servem.</b> Para criar o seu perfil, mostrar o seu trabalho e enviar notificações dentro do site.</p>
+            <p><b class="text-white">Partilha.</b> Não vendemos os seus dados. O e-mail não é mostrado a outros utilizadores.</p>
+            <p><b class="text-white">Os seus direitos.</b> Pode editar o perfil e apagar as suas publicações quando quiser. Pode apagar a sua conta no menu do perfil, em “Apagar conta”.</p>
+            <p class="text-gray-500">Nesta versão de testes os dados ficam apenas no seu navegador. Versão provisória · Outubro de 2026.</p>`
+    },
+    suporte: {
+        title: 'Suporte',
+        html: `
+            <p>Precisa de ajuda, quer reportar um problema ou pedir a remoção de uma obra?</p>
+            <p>Escreva para <a class="text-neonCyan hover:underline" href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p>
+            <p>Para denunciar uma publicação, abra-a e use o botão <b class="text-white">Denunciar</b>.</p>`
+    }
+};
+
+/* ---------- ROTAS (hash) ---------- */
+function route() {
+    const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+    const [a, b] = parts;
+
+    if (a === 'obra' && b) {
+        if (firstRender) { view = { name: 'home', arg: null }; renderAll(); firstRender = false; }
+        if (!getPost(b)) {
+            toast('Obra não encontrada.', 'error');
+            history.replaceState(null, '', lastRouteHash);
+            return;
+        }
+        openDetail(b);
+        return;
+    }
+
+    firstRender = false;
+    lastRouteHash = location.hash || '#/';
+    const fromDetail = detailBackPending;
+    detailBackPending = false;
+    let hadDetail = false;
+    if ($('detailModal') && !$('detailModal').classList.contains('hidden')) { hideModal('detailModal'); selectedPostId = null; hadDetail = true; }
+
+    let next = { name: 'home', arg: null };
+    if (a === 'seguindo' || a === 'salvos') {
+        if (!me()) {
+            history.replaceState(null, '', '#/');
+            lastRouteHash = '#/';
+            openAuth('login', 'Entre para ver esta página.');
+        } else next = { name: a === 'seguindo' ? 'following' : 'saved', arg: null };
+    } else if (a === 'u' && b) {
+        const key = keyOf(b);
+        if (getUser(key)) next = { name: 'profile', arg: key };
+        else { toast('Artista não encontrado.', 'error'); history.replaceState(null, '', '#/'); lastRouteHash = '#/'; }
+    }
+
+    const changed = next.name !== view.name || next.arg !== view.arg;
+    view = next;
+    if (changed) visibleCount = PAGE_SIZE;   // não perde o "carregar mais" ao fechar uma obra
+    closeMenus();
+    if (changed || !(fromDetail || hadDetail)) renderAll(); else renderChrome();
+    if (changed) window.scrollTo({ top: 0 });
+
+    if (afterDetailClose) { const f = afterDetailClose; afterDetailClose = null; f(); }
+}
+
+/* ---------- AÇÕES (delegação de eventos) ---------- */
+const actions = {
+    'go': (el) => { location.hash = el.dataset.hash; closeMenus(); },
+    'go-home': () => { location.hash = '#/'; },
+    'open-post': (el) => {
+        const p = getPost(el.dataset.id);
+        if (!p) return;
+        if (p.nsfw && !revealed.has(p.id)) { revealed.add(p.id); renderGrid(); return; }
+        openPostRoute(p.id);
+    },
+    'open-profile': (el) => { location.hash = '#/u/' + el.dataset.user; },
+    'like': (el) => toggleLike(el.dataset.id),
+    'bookmark': (el) => toggleBookmark(el.dataset.id),
+    'follow': (el) => toggleFollow(el.dataset.user),
+    'share': (el) => sharePost(el.dataset.id),
+    'report': (el) => openReport(el.dataset.id),
+    'edit-post': (el) => openPublish(el.dataset.id),
+    'delete-post': (el) => deletePost(el.dataset.id),
+    'delete-comment': (el) => deleteComment(el.dataset.id),
+    'reveal': () => { revealed.add(selectedPostId); renderDetail(true); renderGrid(); },
+    'publish': () => handlePublish(),
+    'login': () => openAuth('login'),
+    'logout': () => confirmLogout(),
+    'my-profile': () => { closeMenus(); if (me()) location.hash = '#/u/' + me().key; },
+    'edit-profile': () => openProfileEditor(),
+    'toggle-notif': () => toggleNotifPanel(),
+    'toggle-user-menu': () => { const open = $('userMenu').classList.contains('hidden'); closeMenus(); if (open) $('userMenu').classList.remove('hidden'); },
+    'open-notif': (el) => {
+        const n = db.notifications.find(x => x.id === el.dataset.id);
+        closeMenus();
+        if (!n) return;
+        if (n.postId && getPost(n.postId)) openPostRoute(n.postId);
+        else location.hash = '#/u/' + n.fromKey;
+    },
+    'toggle-auth-mode': () => switchAuthMode(authMode === 'login' ? 'signup' : 'login'),
+    'toggle-password': (el) => {
+        const inp = $('authPassword');
+        const show = inp.type === 'password';
+        inp.type = show ? 'text' : 'password';
+        el.innerHTML = `<i class="fa-regular ${show ? 'fa-eye-slash' : 'fa-eye'}"></i>`;
+        if (show) mascotSay('surprised', 'Ei! Agora vejo tudo!');
+        else mascotSay('cover', 'Não estou a ver nada, juro!');
+    },
+    'close-modal': (el) => closeModal(el.dataset.modal),
+    'legal': (el) => {
+        const d = LEGAL[el.dataset.doc];
+        $('infoTitle').textContent = d.title;
+        $('infoBody').innerHTML = d.html;
+        openModal('infoModal');
+    },
+    'category': (el) => { activeCategory = el.dataset.category; visibleCount = PAGE_SIZE; renderAll(); },
+    'tag': (el) => {
+        searchQuery = '#' + el.dataset.tag;
+        syncSearchInputs();
+        visibleCount = PAGE_SIZE;
+        const go = () => { if (view.name !== 'home') location.hash = '#/'; else renderAll(); };
+        if (selectedPostId) closeDetail(go); else go();
+    },
+    'clear-search': () => { searchQuery = ''; syncSearchInputs(); visibleCount = PAGE_SIZE; renderAll(); },
+    'suggest': (el) => { const s = suggestItems[+el.dataset.i]; if (s) runSearch(s.value); },
+    'search-now': (el) => runSearch($(el.dataset.input).value),
+    'thumb-make-cover': (el) => {
+        const i = +el.dataset.idx;
+        if (!(i > 0)) return;
+        const arr = editingPostId ? editOrder : draft;
+        arr.unshift(arr.splice(i, 1)[0]);
+        renderThumbs();
+        $('thumbStrip').scrollLeft = 0;
+    },
+    'clear-filters': () => { searchQuery = ''; activeCategory = 'Todos'; syncSearchInputs(); visibleCount = PAGE_SIZE; renderAll(); },
+    'load-more': () => { visibleCount += PAGE_SIZE; renderGrid(); },
+    'page-prev': () => pageDelta(-1),
+    'page-next': () => pageDelta(1),
+    'thumb-left': (el) => { const i = +el.dataset.idx; if (i > 0) { [draft[i - 1], draft[i]] = [draft[i], draft[i - 1]]; renderThumbs(); } },
+    'thumb-right': (el) => { const i = +el.dataset.idx; if (i < draft.length - 1) { [draft[i + 1], draft[i]] = [draft[i], draft[i + 1]]; renderThumbs(); } },
+    'thumb-remove': (el) => { draft.splice(+el.dataset.idx, 1); renderThumbs(); },
+    'pf-pick-avatar': () => $('pfAvatarInput').click(),
+    'pf-remove-avatar': () => { profileAvatarData = null; paintProfilePreview(); },
+    'export-backup': () => { closeMenus(); exportBackup(); },
+    'import-backup': () => { closeMenus(); $('backupInput').click(); },
+    'delete-account': () => deleteAccount(),
+    'reply-comment': (el) => {
+        if (!requireLogin('Entre para responder.')) return;
+        replyingTo = el.dataset.id;
+        updateReplyBar();
+        $('commentInput').focus();
+    },
+    'cancel-reply': () => { replyingTo = null; updateReplyBar(); },
+    'reader-mode': () => toggleReaderMode(),
+    'reader-full': () => toggleReaderFull()
+};
+
+document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (el && actions[el.dataset.action]) {
+        if (el.tagName === 'BUTTON' && el.disabled) return;
+        actions[el.dataset.action](el, e);
+        return;
+    }
+    // clique fora fecha menus e sugestões
+    if (!e.target.closest('.search-wrap')) hideSuggestions();
+    if (!e.target.closest('#notifPanel, #userMenu')) closeMenus();
+});
+
+/* ---------- EVENTOS DE FORMULÁRIOS E TECLADO ---------- */
+$('authForm').addEventListener('submit', submitAuth);
+$('publishForm').addEventListener('submit', submitPublish);
+$('profileForm').addEventListener('submit', submitProfile);
+
+// Mascote reage ao campo onde a pessoa está
+$('authForm').addEventListener('focusin', (e) => {
+    if (skipNextHint) { skipNextHint = false; return; } // mantém o aviso "Precisas de entrar primeiro"
+    const hint = AUTH_HINTS[e.target.id];
+    if (!hint) return;
+    const [pose, text] = hint();
+    mascotSay(pose, text);
+});
+$('colorPickerContainer').addEventListener('click', (e) => {
+    if (e.target.closest('button[data-color]')) mascotSay('right', 'Boa escolha! Essa cor fica linda.');
+});
+
+$('commentForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!requireLogin('Entre para comentar.')) return;
+    const text = $('commentInput').value.trim();
+    if (!text) return;
+    $('commentInput').value = '';
+    addComment(text);
+});
+$('commentInput').addEventListener('focus', () => {
+    if (!me()) { $('commentInput').blur(); requireLogin('Entre para comentar.'); }
+});
+
+$('reportForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const m = me();
+    if (!m || !reportPostId) return;
+    db.reports.push({
+        id: uid(), postId: reportPostId, byKey: m.key,
+        reason: $('reportReason').value, details: $('reportDetails').value.trim(), createdAt: Date.now()
+    });
+    persist();
+    hideModal('reportModal');
+    toast('Obrigado. A denúncia foi enviada.');
+});
+
+$('confirmOk').addEventListener('click', () => resolveConfirm(true));
+$('confirmCancel').addEventListener('click', () => resolveConfirm(false));
+
+$('pfBio').addEventListener('input', () => { $('pfBioCount').textContent = `${$('pfBio').value.length}/160`; });
+$('pfAvatarInput').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    if (!f.type.startsWith('image/') || f.size > MAX_FILE_MB * 1024 * 1024) return showError($('pfError'), 'Escolha uma imagem até 20 MB.');
+    try {
+        profileAvatarData = await compressImage(f, 256, 0.85, true);
+        showError($('pfError'), '');
+        paintProfilePreview();
+    } catch (err) { showError($('pfError'), 'Não foi possível ler essa imagem.'); }
+    e.target.value = '';
+});
+
+// Zona de upload
+const dropZone = $('dropZone');
+dropZone.addEventListener('click', () => $('fileInput').click());
+dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('fileInput').click(); } });
+$('fileInput').addEventListener('change', (e) => handleFiles(e.target.files));
+['dragenter', 'dragover'].forEach(ev => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('border-neonPurple'); }));
+['dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.remove('border-neonPurple'); }));
+dropZone.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
+
+/* ---------- PESQUISA ----------
+   Ao escrever só aparecem SUGESTÕES. Os resultados só mudam quando a pessoa
+   carrega em Enter, na lupa, ou escolhe uma sugestão. */
+const searchUI = [
+    { input: 'searchInput', box: 'suggestBox' },
+    { input: 'mobileSearchInput', box: 'mobileSuggestBox' }
+];
+const SUGGEST_ICON = { tag: 'fa-hashtag', user: 'fa-user', post: 'fa-image' };
+let suggestItems = [];
+let suggestIndex = -1;
+
+const suggestOpen = () => searchUI.some(u => $(u.box) && !$(u.box).classList.contains('hidden'));
+
+function updateClearBtn() {
+    setFlex($('clearSearchBtn'), !!($('searchInput').value || searchQuery));
+}
+
+function hideSuggestions() {
+    searchUI.forEach(u => {
+        const b = $(u.box);
+        if (b) { b.classList.add('hidden'); b.innerHTML = ''; }
+    });
+    suggestItems = [];
+    suggestIndex = -1;
+}
+
+function buildSuggestions(raw) {
+    const q = raw.trim().toLowerCase().replace(/^[#@]/, '');
+    const out = [];
+    const seen = new Set();
+    const count = { tag: 0, user: 0, post: 0 };
+    const add = (type, label, value) => {
+        const k = type + '|' + value.toLowerCase();
+        if (seen.has(k) || count[type] >= 3 || out.length >= 8) return;
+        seen.add(k); count[type]++;
+        out.push({ type, label, value });
+    };
+
+    if (!q) { // caixa vazia: tags mais usadas
+        const uses = {};
+        db.posts.forEach(p => p.tags.forEach(t => { uses[t] = (uses[t] || 0) + 1; }));
+        Object.entries(uses).sort((a, b) => b[1] - a[1]).slice(0, 6).forEach(([t]) => {
+            count.tag = 0; add('tag', '#' + t, '#' + t);
+        });
+        return out;
+    }
+
+    Object.values(db.users).forEach(u => { if (u.handle.toLowerCase().includes(q)) add('user', '@' + u.handle, u.handle); });
+    const tags = new Set();
+    db.posts.forEach(p => p.tags.forEach(t => tags.add(t)));
+    tags.forEach(t => { if (t.includes(q)) add('tag', '#' + t, '#' + t); });
+    db.posts.forEach(p => { if (p.title.toLowerCase().includes(q)) add('post', p.title, p.title); });
+    return out;
+}
+
+function showSuggestions(inputId) {
+    const ui = searchUI.find(u => u.input === inputId);
+    const input = $(inputId);
+    if (!ui || !input || !$(ui.box)) return;
+    const typed = input.value.trim();
+    const items = buildSuggestions(input.value);
+    hideSuggestions();
+    if (!items.length) return;
+    suggestItems = items;
+    $(ui.box).innerHTML =
+        (typed ? '' : '<div class="suggest-title">Tags em destaque</div>') +
+        items.map((s, i) => `
+            <button type="button" class="suggest-item" data-action="suggest" data-i="${i}">
+                <i class="fa-solid ${SUGGEST_ICON[s.type]}"></i><span class="truncate">${esc(s.label)}</span>
+            </button>`).join('') +
+        (typed ? '<div class="suggest-hint">Prima Enter ou toque na lupa para pesquisar</div>' : '');
+    $(ui.box).classList.remove('hidden');
+}
+
+function runSearch(value) {
+    searchQuery = String(value || '').trim();
+    visibleCount = PAGE_SIZE;
+    syncSearchInputs();
+    renderAll();
+    if (document.activeElement && /INPUT/.test(document.activeElement.tagName)) document.activeElement.blur();
+}
+
+function paintSuggestIndex() {
+    const box = searchUI.map(u => $(u.box)).find(b => b && !b.classList.contains('hidden'));
+    if (!box) return;
+    box.querySelectorAll('.suggest-item').forEach((b, i) => b.classList.toggle('active', i === suggestIndex));
+}
+
+function onSearchKey(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        const picked = suggestIndex >= 0 ? suggestItems[suggestIndex] : null;
+        runSearch(picked ? picked.value : e.target.value);
+    } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && suggestItems.length) {
+        e.preventDefault();
+        const n = suggestItems.length;
+        suggestIndex = e.key === 'ArrowDown' ? (suggestIndex + 1) % n : (suggestIndex <= 0 ? n - 1 : suggestIndex - 1);
+        paintSuggestIndex();
+    }
+}
+
+searchUI.forEach(u => {
+    const input = $(u.input);
+    input.addEventListener('input', () => { updateClearBtn(); showSuggestions(u.input); });
+    input.addEventListener('focus', () => showSuggestions(u.input));
+    input.addEventListener('keydown', onSearchKey);
+});
+$('sortSelect').addEventListener('change', () => { visibleCount = PAGE_SIZE; renderGrid(); });
+
+// Fechar modais ao clicar no fundo escuro
+document.querySelectorAll('.modal').forEach(modal => {
+    modal.addEventListener('mousedown', (e) => { if (e.target === modal) closeModal(modal.id); });
+});
+
+// Teclado: Esc fecha, setas passam páginas
+document.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('article.pin')) {
+        e.preventDefault(); e.target.click(); return;
+    }
+    if (e.key === 'Escape') {
+        if (procCount) return;
+        if (readerFull) return exitReaderFull();
+        if (suggestOpen()) return hideSuggestions();
+        if (!$('notifPanel').classList.contains('hidden') || !$('userMenu').classList.contains('hidden')) return closeMenus();
+        const top = modalStack[modalStack.length - 1];
+        if (top) closeModal(top);
+        return;
+    }
+    if (modalStack[modalStack.length - 1] === 'detailModal' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
+        if (e.key === 'ArrowLeft') pageDelta(-1);
+        if (e.key === 'ArrowRight') pageDelta(1);
+    }
+});
+
+window.addEventListener('hashchange', route);
+
+/* ---------- PARTÍCULAS DE FUNDO ---------- */
+(function particles() {
+    if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const canvas = $('bgCanvas');
+    const ctx = canvas.getContext('2d');
+    let list = [];
+    const resize = () => { canvas.width = innerWidth; canvas.height = innerHeight; };
+    const init = () => {
+        list = Array.from({ length: 30 }, () => ({
+            x: Math.random() * canvas.width, y: Math.random() * canvas.height,
+            r: Math.random() * 2 + 1,
+            c: Math.random() > 0.5 ? '#a855f7' : '#06b6d4',
+            vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4
+        }));
+    };
+    const tick = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        for (const p of list) {
+            p.x += p.vx; p.y += p.vy;
+            if (p.x < 0) p.x = canvas.width; if (p.x > canvas.width) p.x = 0;
+            if (p.y < 0) p.y = canvas.height; if (p.y > canvas.height) p.y = 0;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fillStyle = p.c; ctx.shadowBlur = 8; ctx.shadowColor = p.c;
+            ctx.fill();
+        }
+        requestAnimationFrame(tick);
+    };
+    addEventListener('resize', () => { resize(); init(); });
+    resize(); init(); tick();
+})();
+
+/* ---------- ARRANQUE ---------- */
+(async function init() {
+    await Store.open();
+    const saved = await Store.get('meta', 'db');
+    if (saved) db = Object.assign(db, saved);
+    (await Store.allImages()).forEach((v, k) => images.set(k, v));
+
+    normalizeDb(); // garante campos novos em dados antigos
+
+    $('processingMascot').src = MASCOT.sleepy;
+    buildColorPicker($('colorPickerContainer'), () => selectedColor, c => { selectedColor = c; });
+    setAuthMode('login');
+    syncSearchInputs();
+
+    if (!Store.ok) {
+        toast('O seu navegador não permite guardar dados: nada ficará guardado ao recarregar.', 'error');
+    }
+    route();
+})();

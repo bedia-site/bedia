@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Bédia - O Espaço para Criadores de Mangá e Arte Otaku</title>
+    <meta name="description" content="Bédia: a comunidade onde artistas otakus e criadores de mangá publicam as suas artes, páginas de mangá e personagens originais.">
+    <meta property="og:title" content="Bédia - Comunidade de artistas otakus">
+    <meta property="og:description" content="Publique e descubra mangás, ilustrações e personagens originais.">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Bédia">
+    <meta property="og:url" content="https://arnaldo-sousa2003.github.io/">
+    <meta property="og:image" content="https://arnaldo-sousa2003.github.io/bedia.JPG">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Bédia - Comunidade de artistas otakus">
+    <meta name="twitter:description" content="Publique e descubra mangás, ilustrações e personagens originais.">
+    <meta name="twitter:image" content="https://arnaldo-sousa2003.github.io/bedia.JPG">
+    <meta name="theme-color" content="#090a0f">
+    <link rel="icon" href="bedia.JPG">
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        obsidian: '#090a0f',
+                        cardDark: '#131622',
+                        cardHover: '#1c2033',
+                        neonPurple: '#a855f7',
+                        neonPurpleHover: '#9333ea',
+                        neonCyan: '#06b6d4',
+                        neonPink: '#ec4899',
+                    },
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                }
+            }
+        }
+    </script>
+
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Font Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <!-- Estilos próprios -->
+    <link rel="stylesheet" href="style.css">
+    <!-- Estilos novos: mascote a processar e a perguntar -->
+    <style>
+/* ===== Bédia – estilos extra: mascote a perguntar + a processar ===== */
+
+/* --- Janela de confirmação com mascote --- */
+.confirm-mascot-wrap { flex-direction: column; align-items: center; margin-bottom: 1rem; }
+.confirm-mascot-wrap .speech-bubble {
+    position: relative;
+    background: #fff; color: #0f172a;
+    border-radius: 1rem; padding: .7rem 1rem;
+    font-size: .85rem; font-weight: 700; line-height: 1.35;
+    max-width: 17rem; margin-bottom: 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    animation: bediaPop .35s cubic-bezier(.175,.885,.32,1.275) both;
+}
+.confirm-mascot-wrap .speech-bubble::after {
+    content: ''; position: absolute; left: 50%; bottom: -7px;
+    width: 14px; height: 14px; background: #fff;
+    transform: translateX(-50%) rotate(45deg); border-radius: 2px;
+}
+.confirm-mascot { width: 8.5rem; height: auto; display: block; filter: drop-shadow(0 10px 18px rgba(168,85,247,.35)); }
+
+/* --- A processar --- */
+#processingOverlay:not(.hidden) { animation: bediaFade .2s ease both; }
+.processing-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.processing-figure { position: relative; animation: bediaBreathe 3s ease-in-out infinite; }
+.processing-mascot { width: 9.5rem; height: auto; display: block; filter: drop-shadow(0 12px 22px rgba(6,182,212,.35)); -webkit-user-select: none; user-select: none; }
+.processing-zzz { position: absolute; top: -.2rem; right: -1.2rem; font-weight: 800; color: #67e8f9; pointer-events: none; }
+.processing-zzz span { position: absolute; opacity: 0; animation: bediaZzz 2.4s ease-in-out infinite; }
+.processing-zzz span:nth-child(1) { font-size: .9rem; right: 0;     animation-delay: 0s; }
+.processing-zzz span:nth-child(2) { font-size: 1.2rem; right: -.5rem; animation-delay: .8s; }
+.processing-zzz span:nth-child(3) { font-size: 1.6rem; right: -1rem;  animation-delay: 1.6s; }
+.processing-text { margin-top: 1.1rem; font-size: .95rem; font-weight: 700; color: #fff; letter-spacing: .01em; }
+.processing-dots i { display: inline-block; width: 4px; height: 4px; margin-left: 3px; border-radius: 50%; background: #a855f7; animation: bediaDot 1.2s ease-in-out infinite; }
+.processing-dots i:nth-child(2) { animation-delay: .15s; }
+.processing-dots i:nth-child(3) { animation-delay: .3s; }
+.processing-bar { margin-top: .9rem; width: 9rem; height: 4px; border-radius: 9999px; background: rgba(255,255,255,.1); overflow: hidden; }
+.processing-bar span { display: block; width: 40%; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#a855f7,#06b6d4); animation: bediaBar 1.3s ease-in-out infinite; }
+
+@keyframes bediaPop { 0% { transform: scale(.7); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes bediaFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bediaBreathe { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-5px) scale(1.025); } }
+@keyframes bediaZzz { 0% { opacity: 0; transform: translate(0,6px); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(10px,-22px); } }
+@keyframes bediaDot { 0%,80%,100% { transform: translateY(0); opacity: .4; } 40% { transform: translateY(-4px); opacity: 1; } }
+@keyframes bediaBar { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .processing-bar span { width: 100%; } }
+
+
+/* =====================================================================
+   FEED ESTILO PINTEREST
+   Colunas que crescem com o ecrã, imagens na proporção original,
+   cantos redondos, pouco espaço entre cartões e "Salvar" no hover.
+   ===================================================================== */
+.masonry-grid.pins { column-count: 2; column-gap: 12px; }
+@media (min-width: 640px)  { .masonry-grid.pins { column-count: 3; } }
+@media (min-width: 900px)  { .masonry-grid.pins { column-count: 4; } }
+@media (min-width: 1200px) { .masonry-grid.pins { column-count: 5; } }
+@media (min-width: 1536px) { .masonry-grid.pins { column-count: 6; } }
+@media (max-width: 479px)  { .masonry-grid.pins { column-gap: 8px; } }
+.pins .masonry-item { margin-bottom: 16px; break-inside: avoid; }
+@media (max-width: 479px)  { .pins .masonry-item { margin-bottom: 12px; } }
+
+.pin { cursor: pointer; display: block; border-radius: 16px; outline-offset: 3px; }
+.pin-media {
+    position: relative; overflow: hidden;
+    border-radius: 16px; background: #111426;
+    min-height: 120px;
+    transform: translateZ(0);               /* cantos redondos também no Safari */
+}
+.pin-img {
+    display: block; width: 100%; height: auto;
+    max-height: 34rem; object-fit: cover;   /* páginas muito altas são cortadas, como no Pinterest */
+    opacity: 0; transition: opacity .35s ease, transform .35s ease;
+}
+.pin-img.loaded { opacity: 1; }
+.pin-img.nsfw-blur { transform: scale(1.15); }
+@media (hover: hover) { .pin:hover .pin-img:not(.nsfw-blur) { transform: scale(1.02); } }
+@media (max-width: 479px) { .pin-img { max-height: 26rem; } .pin-media { border-radius: 14px; } }
+
+/* contador de páginas */
+.pin-count {
+    position: absolute; left: 8px; bottom: 8px; z-index: 2;
+    background: rgba(0,0,0,.7); color: #fff;
+    font-size: 10px; font-weight: 700;
+    padding: 3px 8px; border-radius: 9999px;
+}
+.pin-count i { margin-right: 4px; }
+
+/* camada que aparece ao passar o rato */
+.pin-hover {
+    position: absolute; inset: 0; z-index: 3;
+    display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end;
+    padding: 10px;
+    background: linear-gradient(to bottom, rgba(0,0,0,.45), transparent 40%, transparent 70%, rgba(0,0,0,.35));
+    opacity: 0; transition: opacity .2s ease;
+}
+.pin-cat {
+    align-self: flex-start;
+    background: rgba(0,0,0,.7); color: #22d3ee;
+    border: 1px solid rgba(34,211,238,.3);
+    font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 9999px;
+}
+.pin-save {
+    position: absolute; top: 10px; right: 10px;
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #a855f7; color: #fff;
+    font-size: 12px; font-weight: 700;
+    padding: 8px 14px; border-radius: 9999px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.35);
+    transition: background .15s, transform .15s;
+}
+.pin-save:hover { background: #9333ea; transform: scale(1.04); }
+.pin-save.saved { background: #0f172a; color: #22d3ee; }
+.pin-hover { cursor: pointer; }
+@media (hover: hover) {
+    .pin:hover .pin-hover, .pin:focus-visible .pin-hover { opacity: 1; }
+}
+/* No telemóvel não há hover: o botão fica sempre visível, só com o ícone */
+@media (hover: none) {
+    .pin-hover { opacity: 1; background: none; }
+    .pin-cat { display: none; }
+    .pin-save { top: 8px; right: 8px; width: 34px; height: 34px; padding: 0; justify-content: center; background: rgba(15,23,42,.78); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+    .pin-save span { display: none; }
+    .pin-save.saved { color: #22d3ee; }
+}
+
+.pin-nsfw {
+    position: absolute; inset: 0; z-index: 4;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 1rem; background: rgba(0,0,0,.4);
+}
+
+/* texto por baixo da imagem */
+.pin-info { padding: 8px 4px 0; }
+.pin-title {
+    font-size: 13px; font-weight: 600; line-height: 1.3; color: #f3f4f6;
+    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    word-break: break-word;
+}
+.pin-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.pin-author { display: flex; align-items: center; gap: 6px; min-width: 0; color: #9ca3af; font-size: 12px; }
+.pin-author span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pin-author:hover { color: #fff; }
+.pin-stats { display: flex; align-items: center; gap: 10px; flex-shrink: 0; font-size: 11px; color: #9ca3af; }
+.pin-stats i { margin-right: 4px; }
+.pin-like { color: #9ca3af; display: inline-flex; align-items: center; font-weight: 700; }
+.pin-like:hover, .pin-like.liked { color: #ec4899; }
+@media (max-width: 479px) {
+    .pin-title { font-size: 12px; }
+    .pin-author { font-size: 11px; }
+    .pin-stats > span:first-child { display: none; }      /* poupa espaço: só mostra curtidas */
+}
+
+
+/* =====================================================================
+   RESPONSIVO (telemóvel, tablet, portátil e ecrãs grandes)
+   ===================================================================== */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* ecrãs com "notch" / barra de gestos */
+main { padding-left: max(1rem, env(safe-area-inset-left)); padding-right: max(1rem, env(safe-area-inset-right)); }
+#toast { bottom: max(1.25rem, env(safe-area-inset-bottom)); }
+
+/* Telemóvel: o iPhone faz zoom em campos com letra < 16px */
+@media (max-width: 767px) {
+    input, select, textarea, .field { font-size: 16px !important; }
+    .close-x { width: 2.5rem; height: 2.5rem; }
+    .category-btn { padding: .55rem .9rem; }
+    .view-tab { padding: .7rem .9rem; }
+    .menu-item, .notif-item { padding-top: .8rem; padding-bottom: .8rem; }
+
+    #heroSection { padding: 1.25rem; margin-bottom: 1.25rem; }
+    #heroSection h1 { font-size: 1.6rem; }
+    #sortSelect { font-size: 14px !important; }
+    #feedSection .ml-auto { margin-left: 0; width: 100%; justify-content: flex-end; }
+
+    /* janelas: ocupam o ecrã e rolam por inteiro */
+    #detailModal, #publishModal { padding: .5rem; align-items: flex-start; }
+
+    /* obra aberta: imagem em cima, informação por baixo, tudo na mesma rolagem */
+    #detailModal > .glass-modal { max-height: none; }
+    #detailModal #detailViewer { padding: .5rem; }
+    #detailModal #detailViewer img { max-height: 75vh; width: auto; max-width: 100%; margin: 0 auto; }
+    #detailModal .overflow-y-auto { overflow: visible; }
+    #detailModal #commentsList { max-height: 18rem; overflow-y: auto; }
+}
+
+/* Telemóveis pequenos (320–380px) */
+@media (max-width: 380px) {
+    #loginBtn span { display: none; }                      /* só o ícone de entrar */
+    #loginBtn { padding: .55rem .7rem; }
+}
+
+/* Tablet em pé: pesquisa continua por baixo do logótipo */
+@media (min-width: 768px) and (max-width: 1023px) {
+    #detailModal > .glass-modal { max-height: none; }
+    #detailModal .overflow-y-auto { overflow: visible; }
+}
+
+/* Janela de publicar: miniaturas rolam na horizontal sem partir o ecrã */
+@media (max-width: 479px) { .thumb { width: 6rem; height: 7.5rem; } }
+
+/* Ecrãs grandes: imagem da obra aberta com mais espaço */
+@media (min-width: 1536px) { #detailModal > .glass-modal { max-width: 72rem; } }
+
+/* Paisagem em telemóvel: janelas não ficam cortadas */
+@media (max-height: 480px) and (orientation: landscape) {
+    #detailModal, #publishModal { align-items: flex-start; }
+    #detailModal > .glass-modal { max-height: none; }
+}
+
+/* Botões do rato/dedo: sem destaque azul ao tocar */
+button, a, [data-action] { -webkit-tap-highlight-color: transparent; }
+
+/* =====================================================================
+   JANELA DE CONTA NO TELEMÓVEL: mascote ao lado, formulário à direita
+   (igual ao computador, mas compacto). Só ecrãs até 767px; o PC não muda.
+   ===================================================================== */
+@media (max-width: 767px) {
+    #authModal { padding: .5rem; }
+    #authModal > .glass-modal { margin: .5rem 0; }
+    #authModal > .glass-modal > .flex { flex-direction: row; }
+
+    /* coluna do mascote */
+    #authModal aside {
+        width: 36%; flex: 0 0 36%; min-width: 0;
+        padding: 2.5rem .5rem .75rem;
+        gap: .5rem;
+        border-bottom-width: 0;
+        border-right-width: 1px;
+        justify-content: flex-end;
+    }
+    #authModal .speech-bubble {
+        font-size: .65rem; line-height: 1.3;
+        padding: .45rem .55rem; border-radius: .8rem;
+        max-width: 100%; width: 100%;
+    }
+    #authModal .auth-mascot { height: 9rem; max-width: 100%; }
+
+    /* coluna do formulário */
+    #authFormSide { width: 64%; flex: 1 1 0; min-width: 0; padding: 1rem .75rem; }
+    #authFormSide .w-14 { width: 2.5rem; height: 2.5rem; }
+    #authFormSide .text-center.mb-5 { margin-bottom: .75rem; }
+    #authModalTitle { font-size: 1.05rem; line-height: 1.2; }
+    #authModalSubtitle { font-size: .68rem; }
+    #authForm { gap: .6rem; }
+    #authModal .field { padding: .5rem .6rem; }
+    #authModal .close-x { top: .4rem; right: .4rem; width: 2rem; height: 2rem; }
+}
+
+/* =====================================================================
+   LEITOR (vertical, ecrã inteiro) e botões do leitor
+   ===================================================================== */
+.reader-btn {
+    width: 2.25rem; height: 2.25rem; border-radius: 9999px;
+    background: rgba(0, 0, 0, .7); color: #fff;
+    border: 1px solid rgba(255, 255, 255, .15);
+    font-size: .8rem; transition: background .15s;
+}
+.reader-btn:hover { background: #a855f7; }
+#detailViewer.scroll-mode { overflow-y: auto; align-items: flex-start; max-height: 75vh; padding: 0; }
+.reader-strip { width: 100%; max-width: 46rem; margin: 0 auto; }
+.reader-strip img { display: block; width: 100%; height: auto; }
+#detailModal #detailViewer.scroll-mode img { max-height: none; width: 100%; max-width: 100%; }
+#readerPane.reader-full { position: fixed; inset: 0; z-index: 90; width: 100%; max-width: none; min-height: 0; border: 0; background: #000; }
+#readerPane.reader-full #detailViewer { padding: .5rem; }
+#readerPane.reader-full #detailViewer img { max-height: calc(100vh - 4rem); }
+#readerPane.reader-full #detailViewer.scroll-mode { max-height: none; min-height: 0; padding: 0; }
+#readerPane.reader-full #detailViewer.scroll-mode img { max-height: none; }
+
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <a href="#feedSection" class="skip-link">Saltar para o conteúdo</a>
+
+    <!-- CANVAS PARTICLES BACKGROUND -->
+    <canvas id="bgCanvas" class="fixed top-0 left-0 w-full h-full pointer-events-none z-0 opacity-30" aria-hidden="true"></canvas>
+
+    <!-- ================= HEADER ================= -->
+    <header class="sticky top-0 z-40 glass-nav px-4 lg:px-8 py-3">
+        <div class="max-w-7xl mx-auto flex items-center justify-between gap-3">
+
+            <!-- LOGO: foto + nome -->
+            <a href="#/" class="flex items-center gap-2.5 group shrink-0" title="Bédia">
+                <div class="w-11 h-11 rounded-xl overflow-hidden border border-neonPurple/40 shadow-lg bg-slate-900 transition-transform duration-300 group-hover:scale-105">
+                    <img src="bedia.JPG" alt="Bédia" class="w-full h-full object-cover object-center">
+                </div>
+                <span class="text-2xl font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white via-purple-200 to-neonCyan">Bédia</span>
+            </a>
+
+            <!-- PESQUISA (desktop): só mostra sugestões; pesquisa com Enter/lupa -->
+            <div class="flex-1 max-w-xl mx-2 hidden md:block search-wrap">
+                <div class="relative flex items-center">
+                    <button type="button" data-action="search-now" data-input="searchInput" aria-label="Pesquisar" class="absolute left-4 text-gray-400 hover:text-neonCyan"><i class="fa-solid fa-magnifying-glass"></i></button>
+                    <input type="text" id="searchInput" autocomplete="off" enterkeyhint="search" aria-label="Pesquisar" placeholder="Pesquisar artistas, mangás, #tags... (Enter)"
+                        class="w-full bg-slate-900/80 border border-slate-700/60 rounded-full py-2 pl-11 pr-9 text-xs text-gray-200 placeholder-gray-400 focus:outline-none focus:border-neonPurple focus:ring-1 focus:ring-neonPurple transition-all">
+                    <button id="clearSearchBtn" data-action="clear-search" aria-label="Limpar pesquisa" class="hidden absolute right-3 text-gray-400 hover:text-white text-xs bg-slate-800 rounded-full w-5 h-5 items-center justify-center">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                    <div id="suggestBox" class="suggest-box hidden"></div>
+                </div>
+            </div>
+
+            <!-- AÇÕES -->
+            <div class="flex items-center gap-2 sm:gap-3">
+                <button data-action="publish" class="flex items-center gap-2 bg-gradient-to-r from-neonPurple to-purple-600 hover:from-purple-600 hover:to-neonPurple text-white px-4 py-2 rounded-full font-semibold text-xs shadow-lg hover:shadow-neonPurple/30 transition-all">
+                    <i class="fa-solid fa-plus text-xs"></i>
+                    <span class="hidden sm:inline">Publicar Arte</span>
+                </button>
+
+                <!-- Visitante -->
+                <button id="loginBtn" data-action="login" class="bg-slate-800 hover:bg-slate-700 text-gray-200 border border-slate-700/80 px-3.5 py-2 rounded-full font-medium text-xs transition-all flex items-center gap-1.5">
+                    <i class="fa-solid fa-right-to-bracket text-neonCyan"></i>
+                    <span>Entrar</span>
+                </button>
+
+                <!-- Utilizador com sessão -->
+                <div id="loggedBox" class="hidden items-center gap-2">
+                    <!-- Notificações -->
+                    <div class="relative">
+                        <button id="notifBtn" data-action="toggle-notif" aria-label="Notificações" class="relative w-9 h-9 rounded-full bg-slate-800 hover:bg-slate-700 border border-slate-700/80 text-gray-200 flex items-center justify-center transition-all">
+                            <i class="fa-regular fa-bell text-sm"></i>
+                            <span id="notifBadge" class="hidden absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-neonPink text-white text-[10px] font-bold items-center justify-center">0</span>
+                        </button>
+                        <div id="notifPanel" class="hidden dropdown-panel absolute right-0 mt-2 w-80 max-w-[85vw] glass-modal rounded-2xl shadow-2xl overflow-hidden z-50">
+                            <div class="px-4 py-2.5 border-b border-slate-800 text-xs font-bold text-white">Notificações</div>
+                            <div id="notifList" class="max-h-96 overflow-y-auto"></div>
+                        </div>
+                    </div>
+
+                    <!-- Menu do utilizador -->
+                    <div class="relative">
+                        <button id="userMenuBtn" data-action="toggle-user-menu" aria-label="Menu da conta" class="flex items-center gap-1.5 rounded-full hover:opacity-90 transition-all">
+                            <span id="userMenuAvatar"></span>
+                        </button>
+                        <div id="userMenu" class="hidden dropdown-panel absolute right-0 mt-2 w-56 glass-modal rounded-2xl shadow-2xl overflow-hidden z-50">
+                            <div class="px-4 py-3 border-b border-slate-800">
+                                <div id="userMenuName" class="text-xs font-bold text-white truncate">@</div>
+                                <div id="userMenuEmail" class="text-[10px] text-gray-400 truncate"></div>
+                            </div>
+                            <button data-action="my-profile" class="menu-item"><i class="fa-regular fa-user"></i> Meu perfil</button>
+                            <button data-action="edit-profile" class="menu-item"><i class="fa-solid fa-pen"></i> Editar perfil</button>
+                            <button data-action="go" data-hash="#/salvos" class="menu-item"><i class="fa-regular fa-bookmark"></i> Meus salvos</button>
+                            <div class="border-t border-slate-800 my-1"></div>
+                            <button data-action="export-backup" class="menu-item"><i class="fa-solid fa-download"></i> Guardar cópia</button>
+                            <button data-action="import-backup" class="menu-item"><i class="fa-solid fa-upload"></i> Importar cópia</button>
+                            <button data-action="delete-account" class="menu-item text-pink-300"><i class="fa-solid fa-user-xmark"></i> Apagar conta</button>
+                            <div class="border-t border-slate-800 my-1"></div>
+                            <button data-action="logout" class="menu-item text-pink-300"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sair</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pesquisa (telemóvel) -->
+        <div class="mt-2.5 md:hidden search-wrap">
+            <div class="relative flex items-center">
+                <button type="button" data-action="search-now" data-input="mobileSearchInput" aria-label="Pesquisar" class="absolute left-4 text-gray-400 hover:text-neonCyan"><i class="fa-solid fa-magnifying-glass"></i></button>
+                <input type="text" id="mobileSearchInput" autocomplete="off" enterkeyhint="search" aria-label="Pesquisar" placeholder="Buscar mangá, artistas, tags..."
+                    class="w-full bg-slate-900/90 border border-slate-700/60 rounded-full py-2 pl-10 pr-4 text-xs text-gray-200 placeholder-gray-400 focus:outline-none focus:border-neonPurple">
+                <div id="mobileSuggestBox" class="suggest-box hidden"></div>
+            </div>
+        </div>
+    </header>
+
+    <!-- ================= CONTEÚDO ================= -->
+    <main class="relative z-10 flex-1 max-w-screen-2xl w-full mx-auto px-4 lg:px-8 py-6">
+
+        <!-- BANNER (só na página inicial) -->
+        <section id="heroSection" class="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-950 via-purple-950/40 to-slate-950 border border-purple-500/20 p-6 md:p-8 mb-8 shadow-2xl">
+            <div class="absolute -right-10 -bottom-10 w-64 h-64 bg-neonPurple/10 rounded-full blur-3xl pointer-events-none"></div>
+            <div class="absolute -left-10 -top-10 w-64 h-64 bg-neonCyan/10 rounded-full blur-3xl pointer-events-none"></div>
+
+            <div class="relative z-10 max-w-2xl">
+                <span class="inline-flex items-center gap-1.5 bg-neonPurple/20 text-neonCyan border border-neonPurple/30 px-3 py-1 rounded-full text-xs font-semibold mb-3">
+                    <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i> Plataforma para Otakus & Mangakás
+                </span>
+                <h1 class="text-2xl md:text-4xl font-black text-white leading-tight mb-2">
+                    Bem-vindo à <span class="bg-clip-text text-transparent bg-gradient-to-r from-neonPurple via-neonPink to-neonCyan">Bédia</span>
+                </h1>
+                <p class="text-gray-300 text-xs md:text-sm mb-5 leading-relaxed">
+                    Exiba seus quadros, esboços e páginas de mangás autorais. Conecte-se com outros artistas otakus, receba avaliações e crie sua comunidade!
+                </p>
+                <div class="flex flex-wrap gap-3">
+                    <button data-action="publish" class="bg-neonPurple hover:bg-neonPurpleHover text-white px-5 py-2.5 rounded-xl font-bold text-xs transition-all shadow-lg flex items-center gap-2">
+                        <i class="fa-solid fa-pen-nib"></i> Criar Publicação
+                    </button>
+                    <a href="#feedSection" class="bg-slate-900/90 hover:bg-slate-800 text-gray-200 border border-slate-700 px-5 py-2.5 rounded-xl font-semibold text-xs transition-all flex items-center gap-2">
+                        <i class="fa-solid fa-compass"></i> Explorar Feed
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- CABEÇALHO DE PERFIL (só em #/u/nome) -->
+        <section id="profileHeader" class="hidden mb-8"></section>
+
+        <!-- ABAS, CATEGORIAS E ORDEM -->
+        <section id="feedSection" class="mb-6 scroll-mt-24">
+            <div id="viewTabs" class="flex items-center gap-1 mb-4 border-b border-slate-800/80 overflow-x-auto scrollbar-none">
+                <button data-action="go" data-hash="#/" data-tab="home" class="view-tab"><i class="fa-solid fa-compass"></i> Explorar</button>
+                <button data-action="go" data-hash="#/seguindo" data-tab="following" class="view-tab"><i class="fa-solid fa-user-group"></i> Seguindo</button>
+                <button data-action="go" data-hash="#/salvos" data-tab="saved" class="view-tab"><i class="fa-regular fa-bookmark"></i> Salvos</button>
+            </div>
+
+            <div class="flex items-center justify-between flex-wrap gap-3">
+                <div id="categoryContainer" class="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none w-full md:w-auto">
+                    <button data-action="category" data-category="Todos" class="category-btn">✨ Todos</button>
+                    <button data-action="category" data-category="Mangá / Quadrinhos" class="category-btn">📖 Mangá & Páginas</button>
+                    <button data-action="category" data-category="Personagens Originais" class="category-btn">🎭 Personagens (OC)</button>
+                    <button data-action="category" data-category="Ilustração 2D" class="category-btn">🎨 Ilustração Digital</button>
+                    <button data-action="category" data-category="Esboços" class="category-btn">✏️ Concept & Esboços</button>
+                </div>
+
+                <div class="flex items-center gap-2 text-xs text-gray-400 ml-auto">
+                    <label for="sortSelect">Ordenar:</label>
+                    <select id="sortSelect" class="bg-slate-900 text-gray-200 border border-slate-800 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neonPurple cursor-pointer">
+                        <option value="recent">Mais Recentes</option>
+                        <option value="popular">Mais Curtidos</option>
+                        <option value="discussed">Mais Comentados</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="filterInfo" class="hidden mt-3 text-xs text-gray-400 items-center gap-2"></div>
+        </section>
+
+        <!-- FEED -->
+        <section aria-live="polite">
+            <div id="artMasonryGrid" class="masonry-grid pins min-h-[200px]"></div>
+
+            <div id="emptyState" class="hidden text-center py-16 px-4">
+                <div class="w-16 h-16 mx-auto mb-3 bg-slate-900 rounded-full flex items-center justify-center text-neonPurple text-2xl border border-slate-800">
+                    <i id="emptyIcon" class="fa-solid fa-ghost"></i>
+                </div>
+                <h3 id="emptyTitle" class="text-base font-bold text-gray-200 mb-1"></h3>
+                <p id="emptyText" class="text-gray-400 text-xs max-w-sm mx-auto mb-5"></p>
+                <button id="emptyAction" class="bg-neonPurple text-white px-4 py-2 rounded-full text-xs font-semibold hover:bg-neonPurpleHover transition-all"></button>
+            </div>
+
+            <div id="loadMoreWrap" class="hidden text-center mt-6">
+                <button data-action="load-more" class="bg-slate-900 hover:bg-slate-800 text-gray-200 border border-slate-700 px-6 py-2.5 rounded-full text-xs font-semibold transition-all">
+                    Carregar mais
+                </button>
+            </div>
+        </section>
+    </main>
+
+    <!-- ================= RODAPÉ ================= -->
+    <footer class="mt-16 border-t border-slate-900 bg-slate-950 py-6 text-xs text-gray-500 relative z-10">
+        <div class="max-w-screen-2xl mx-auto px-4 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-3 text-center md:text-left">
+            <div><span class="text-neonPurple font-extrabold">Bédia</span> &copy; 2026 - A comunidade dos artistas otakus.</div>
+            <div class="flex gap-4">
+                <button data-action="legal" data-doc="termos" class="hover:text-neonCyan transition-colors">Termos</button>
+                <button data-action="legal" data-doc="privacidade" class="hover:text-neonCyan transition-colors">Privacidade</button>
+                <button data-action="legal" data-doc="suporte" class="hover:text-neonCyan transition-colors">Suporte</button>
+            </div>
+        </div>
+    </footer>
+
+
+    <!-- ================= MODAIS ================= -->
+
+    <!-- 1. CONTA (criar conta / entrar) — com o mascote -->
+    <div id="authModal" class="modal hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+        <div class="glass-modal w-full max-w-3xl rounded-2xl relative shadow-2xl my-6 overflow-hidden">
+            <button data-action="close-modal" data-modal="authModal" aria-label="Fechar" class="close-x absolute top-4 right-4 z-10"><i class="fa-solid fa-xmark"></i></button>
+
+            <div class="flex flex-col md:flex-row">
+
+                <!-- LADO DO MASCOTE -->
+                <aside class="md:w-5/12 flex flex-col items-center justify-end gap-3 px-5 pt-6 pb-0 md:pb-6 bg-gradient-to-b from-purple-950/40 to-slate-950/70 border-b md:border-b-0 md:border-r border-slate-800">
+                    <div id="authBubble" class="speech-bubble" aria-live="polite">
+                        <span id="authBubbleText">Bem-vindo de volta, artista! Entra aí.</span>
+                    </div>
+                    <div class="mascot-float">
+                        <img id="authMascot" src="mascote1.png" data-pose="up" alt="Mascote do Bédia" class="auth-mascot">
+                    </div>
+                </aside>
+
+                <!-- LADO DO FORMULÁRIO -->
+                <div id="authFormSide" class="md:w-7/12 p-6">
+                    <div class="text-center mb-5">
+                        <div class="w-14 h-14 rounded-xl overflow-hidden border border-neonPurple/40 mx-auto mb-2 bg-slate-900">
+                            <img src="bedia.JPG" alt="Bédia" class="w-full h-full object-cover object-center">
+                        </div>
+                        <h3 class="text-xl font-black text-white" id="authModalTitle">Entrar no Bédia</h3>
+                        <p class="text-xs text-gray-400 mt-1" id="authModalSubtitle">Bem-vindo de volta, artista!</p>
+                    </div>
+
+                    <div id="authLockWarning" class="hidden mb-4 p-3 bg-neonPink/10 border border-neonPink/30 rounded-xl items-center gap-3 text-xs text-pink-200">
+                        <i class="fa-solid fa-lock text-neonPink text-base"></i>
+                        <span id="authLockText">Você precisa estar logado para continuar.</span>
+                    </div>
+
+                    <form id="authForm" class="space-y-3.5" novalidate>
+                        <div>
+                            <label id="authUsernameLabel" for="authUsername" class="block text-xs font-semibold text-gray-300 mb-1">Utilizador ou e-mail *</label>
+                            <input type="text" id="authUsername" autocomplete="username" maxlength="40" placeholder="Seu utilizador ou e-mail" class="field">
+                        </div>
+
+                        <div id="authEmailGroup" class="collapsible">
+                            <div class="collapsible-inner">
+                                <div class="pt-3.5">
+                                    <label for="authEmail" class="block text-xs font-semibold text-gray-300 mb-1">E-mail *</label>
+                                    <input type="email" id="authEmail" autocomplete="email" placeholder="artista@exemplo.com" class="field">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label for="authPassword" class="block text-xs font-semibold text-gray-300 mb-1">Senha *</label>
+                            <div class="relative">
+                                <input type="password" id="authPassword" autocomplete="current-password" placeholder="Mínimo 6 caracteres" class="field pr-10">
+                                <button type="button" data-action="toggle-password" aria-label="Mostrar senha" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-xs"><i class="fa-regular fa-eye"></i></button>
+                            </div>
+                        </div>
+
+                        <div id="authColorGroup" class="collapsible">
+                            <div class="collapsible-inner">
+                                <div class="pt-3.5">
+                                    <label class="block text-xs font-semibold text-gray-300 mb-1">Cor da foto de perfil</label>
+                                    <div class="flex items-center gap-3" id="colorPickerContainer"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <p id="authError" class="hidden text-xs text-pink-300 bg-neonPink/10 border border-neonPink/30 rounded-lg px-3 py-2" role="alert"></p>
+
+                        <button type="submit" id="authSubmitBtn" class="w-full bg-gradient-to-r from-neonPurple to-neonPink hover:opacity-90 text-white font-bold py-2.5 rounded-xl text-xs shadow-lg transition-all mt-1 disabled:opacity-60">
+                            Entrar
+                        </button>
+                    </form>
+
+                    <div class="mt-4 pt-4 border-t border-slate-800 text-center">
+                        <button type="button" id="toggleAuthModeBtn" data-action="toggle-auth-mode" class="text-xs text-neonCyan hover:underline font-semibold">
+                            Não tem conta? Criar Conta
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- 2. PUBLICAR / EDITAR -->
+    <div id="publishModal" class="modal hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="publishTitleText">
+        <div class="glass-modal w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden my-6">
+            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-cloud-arrow-up text-neonPurple"></i> <span id="publishTitleText">Nova Publicação no Bédia</span>
+                </h3>
+                <button data-action="close-modal" data-modal="publishModal" aria-label="Fechar" class="close-x"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <form id="publishForm" class="p-6 space-y-4" novalidate>
+                <div id="imagesGroup">
+                    <label class="block text-xs font-semibold text-gray-300 mb-1.5">
+                        <span id="imagesLabel">Imagens ou PDF (clique na estrela ⭐ para escolher a capa) *</span>
+                    </label>
+
+                    <div id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-neonPurple rounded-xl p-5 text-center cursor-pointer bg-slate-950/50 hover:bg-slate-950 transition-all" tabindex="0" role="button" aria-label="Escolher imagens ou PDF">
+                        <input type="file" id="fileInput" class="hidden" accept="image/*,application/pdf" multiple>
+                        <div class="space-y-1.5">
+                            <div class="w-10 h-10 rounded-full bg-purple-900/30 text-neonPurple flex items-center justify-center mx-auto text-lg"><i class="fa-solid fa-image"></i></div>
+                            <p class="text-xs text-gray-300 font-medium">Clique ou arraste imagens ou um PDF para aqui</p>
+                            <p class="text-[10px] text-gray-500">Para um capítulo de mangá, envie o PDF ou várias páginas. Até 80 páginas (PDF até 50 MB, imagens até 20 MB cada).</p>
+                        </div>
+                    </div>
+
+                    <div id="thumbStrip" class="mt-3 flex gap-2 overflow-x-auto pb-1"></div>
+                </div>
+
+                <div>
+                    <label for="postTitle" class="block text-xs font-semibold text-gray-300 mb-1">Título do trabalho *</label>
+                    <input type="text" id="postTitle" maxlength="80" placeholder="Ex: Capa do Capítulo 1 - O Guerreiro das Sombras" class="field">
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label for="postCategory" class="block text-xs font-semibold text-gray-300 mb-1">Categoria *</label>
+                        <select id="postCategory" class="field cursor-pointer">
+                            <option value="Mangá / Quadrinhos">📖 Mangá / Quadrinhos</option>
+                            <option value="Personagens Originais">🎭 Personagens (OC)</option>
+                            <option value="Ilustração 2D" selected>🎨 Ilustração Digital</option>
+                            <option value="Esboços">✏️ Esboço / Concept</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="postTags" class="block text-xs font-semibold text-gray-300 mb-1">Género / tags (separados por vírgula)</label>
+                        <input type="text" id="postTags" maxlength="120" placeholder="manga, oc, cyberpunk, digital" class="field">
+                    </div>
+                </div>
+
+                <div>
+                    <label for="postDescription" class="block text-xs font-semibold text-gray-300 mb-1">Sinopse / descrição</label>
+                    <textarea id="postDescription" rows="3" maxlength="1000" placeholder="Conte mais sobre o personagem, o processo de criação ou as ferramentas usadas..." class="field"></textarea>
+                </div>
+
+                <label class="flex items-start gap-2.5 text-xs text-gray-300 cursor-pointer">
+                    <input type="checkbox" id="postNsfw" class="mt-0.5 accent-purple-500">
+                    <span><strong class="text-white">Conteúdo sensível.</strong> A imagem aparece desfocada até a pessoa decidir ver.</span>
+                </label>
+
+                <label id="termsGroup" class="flex items-start gap-2.5 text-xs text-gray-300 cursor-pointer">
+                    <input type="checkbox" id="postTerms" class="mt-0.5 accent-purple-500">
+                    <span>Confirmo que esta arte é minha (ou tenho autorização) e aceito os <button type="button" data-action="legal" data-doc="termos" class="text-neonCyan hover:underline">Termos</button>.</span>
+                </label>
+
+                <p id="publishStatus" class="hidden text-xs text-neonCyan bg-neonCyan/10 border border-neonCyan/30 rounded-lg px-3 py-2" role="status"></p>
+                <p id="publishError" class="hidden text-xs text-pink-300 bg-neonPink/10 border border-neonPink/30 rounded-lg px-3 py-2" role="alert"></p>
+
+                <div class="pt-2 border-t border-slate-800 flex justify-end gap-2">
+                    <button type="button" data-action="close-modal" data-modal="publishModal" class="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white">Cancelar</button>
+                    <button type="submit" id="publishSubmitBtn" class="bg-gradient-to-r from-neonPurple to-neonPink text-white px-5 py-2 rounded-xl font-bold text-xs shadow-lg flex items-center gap-1.5 disabled:opacity-60">
+                        <i class="fa-solid fa-paper-plane"></i> <span>Publicar no Bédia</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- 3. DETALHE DA OBRA / LEITOR -->
+    <div id="detailModal" class="modal hidden fixed inset-0 z-50 bg-black/90 backdrop-blur-lg flex items-center justify-center p-2 sm:p-4 overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+        <div class="glass-modal w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden flex flex-col lg:flex-row max-h-[94vh]">
+
+            <!-- Esquerda: imagem / leitor -->
+            <div id="readerPane" class="lg:w-7/12 bg-black/95 flex flex-col relative min-h-[300px] lg:min-h-[560px] border-b lg:border-b-0 lg:border-r border-slate-800">
+                <div class="absolute top-3 left-3 z-20">
+                    <span id="detailBadgeCategory" class="bg-black/80 backdrop-blur-md text-neonCyan border border-neonCyan/30 text-[10px] font-bold px-3 py-1 rounded-full"></span>
+                </div>
+                <div class="absolute top-3 right-3 z-20 flex items-center gap-1.5">
+                    <button type="button" id="readerModeBtn" data-action="reader-mode" class="reader-btn hidden items-center justify-center" aria-label="Ler na vertical" title="Ler na vertical"><i class="fa-solid fa-scroll"></i></button>
+                    <button type="button" id="readerFullBtn" data-action="reader-full" class="reader-btn flex items-center justify-center" aria-label="Ecrã inteiro" title="Ecrã inteiro"><i class="fa-solid fa-expand"></i></button>
+                </div>
+                <div id="detailViewer" class="flex-1 flex items-center justify-center p-4 relative overflow-hidden"></div>
+
+                <div id="detailPager" class="hidden bg-slate-950 p-2.5 border-t border-slate-800 items-center justify-between text-xs text-gray-300">
+                    <button data-action="page-prev" id="pagePrev" class="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-gray-200 transition-all disabled:opacity-30">
+                        <i class="fa-solid fa-chevron-left mr-1"></i> Anterior
+                    </button>
+                    <span id="pageIndicator" class="font-mono text-neonCyan font-bold"></span>
+                    <button data-action="page-next" id="pageNext" class="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-gray-200 transition-all disabled:opacity-30">
+                        Próxima <i class="fa-solid fa-chevron-right ml-1"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Direita: info, reações, comentários -->
+            <div class="lg:w-5/12 flex flex-col bg-slate-900/90 p-5 overflow-y-auto">
+                <div class="flex items-start justify-between gap-3 mb-4">
+                    <div id="detailAuthor" class="min-w-0"></div>
+                    <button data-action="close-modal" data-modal="detailModal" aria-label="Fechar" class="close-x shrink-0"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+
+                <h2 id="detailTitle" class="text-lg font-extrabold text-white mb-1 leading-tight break-words"></h2>
+                <div id="detailMeta" class="text-[11px] text-gray-500 mb-3"></div>
+                <p id="detailDescription" class="text-xs text-gray-300 leading-relaxed mb-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800 whitespace-pre-line break-words"></p>
+                <div id="detailTags" class="flex flex-wrap gap-1 mb-4"></div>
+
+                <div id="detailActions" class="flex items-center justify-between flex-wrap gap-2 py-2.5 border-y border-slate-800 mb-3"></div>
+
+                <div class="flex-1 flex flex-col min-h-[140px] mb-3">
+                    <h5 class="text-[11px] font-bold uppercase text-gray-400 tracking-wider mb-2 flex items-center gap-1.5">
+                        <i class="fa-solid fa-comments text-neonPurple"></i> Comentários (<span id="commentCount">0</span>)
+                    </h5>
+                    <div id="commentsList" class="flex-1 overflow-y-auto space-y-2 pr-1 max-h-60 scrollbar-none"></div>
+                </div>
+
+                <div id="replyBar" class="hidden items-center justify-between gap-2 text-[11px] text-gray-400 bg-slate-950/70 border border-slate-800 rounded-lg px-3 py-1.5 mb-2">
+                    <span><i class="fa-solid fa-reply mr-1 text-neonCyan"></i>A responder a <b id="replyBarText" class="text-white"></b></span>
+                    <button type="button" data-action="cancel-reply" aria-label="Cancelar resposta" class="text-gray-500 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+
+                <form id="commentForm" class="flex items-center gap-2 pt-2 border-t border-slate-800">
+                    <input type="text" id="commentInput" maxlength="500" autocomplete="off" aria-label="Comentário"
+                        class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-neonPurple">
+                    <button type="submit" aria-label="Enviar comentário" class="bg-neonPurple hover:bg-neonPurpleHover text-white px-3 py-2 rounded-xl text-xs font-semibold">
+                        <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- 4. EDITAR PERFIL -->
+    <div id="profileModal" class="modal hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
+        <div class="glass-modal w-full max-w-md rounded-2xl shadow-2xl my-6 overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+                <h3 id="profileModalTitle" class="text-sm font-bold text-white"><i class="fa-solid fa-user-pen text-neonPurple mr-2"></i>Editar perfil</h3>
+                <button data-action="close-modal" data-modal="profileModal" aria-label="Fechar" class="close-x"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="profileForm" class="p-6 space-y-4" novalidate>
+                <div class="flex items-center gap-4">
+                    <div id="pfAvatarPreview"></div>
+                    <div class="flex flex-col gap-2">
+                        <button type="button" data-action="pf-pick-avatar" class="bg-slate-800 hover:bg-slate-700 text-gray-200 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold">Escolher foto</button>
+                        <button type="button" data-action="pf-remove-avatar" class="text-[11px] text-gray-400 hover:text-pink-300 text-left">Remover foto</button>
+                        <input type="file" id="pfAvatarInput" accept="image/*" class="hidden">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-gray-300 mb-1">Cor (quando não há foto)</label>
+                    <div class="flex items-center gap-3" id="pfColors"></div>
+                </div>
+
+                <div>
+                    <label for="pfBio" class="block text-xs font-semibold text-gray-300 mb-1">Bio <span id="pfBioCount" class="text-gray-500 font-normal">0/160</span></label>
+                    <textarea id="pfBio" rows="3" maxlength="160" placeholder="Fale um pouco sobre você e a sua arte..." class="field"></textarea>
+                </div>
+
+                <div>
+                    <label for="pfLink" class="block text-xs font-semibold text-gray-300 mb-1">Link (Instagram, portfólio...)</label>
+                    <input type="text" id="pfLink" maxlength="120" placeholder="https://" class="field">
+                </div>
+
+                <p id="pfError" class="hidden text-xs text-pink-300 bg-neonPink/10 border border-neonPink/30 rounded-lg px-3 py-2" role="alert"></p>
+
+                <div class="pt-2 border-t border-slate-800 flex justify-end gap-2">
+                    <button type="button" data-action="close-modal" data-modal="profileModal" class="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white">Cancelar</button>
+                    <button type="submit" class="bg-gradient-to-r from-neonPurple to-neonPink text-white px-5 py-2 rounded-xl font-bold text-xs shadow-lg">Guardar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- 5. DENUNCIAR -->
+    <div id="reportModal" class="modal hidden fixed inset-0 z-[60] bg-black/85 backdrop-blur-md flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="reportTitle">
+        <div class="glass-modal w-full max-w-sm rounded-2xl p-6 shadow-2xl relative">
+            <button data-action="close-modal" data-modal="reportModal" aria-label="Fechar" class="close-x absolute top-4 right-4"><i class="fa-solid fa-xmark"></i></button>
+            <h3 id="reportTitle" class="text-sm font-bold text-white mb-1"><i class="fa-solid fa-flag text-neonPink mr-2"></i>Denunciar publicação</h3>
+            <p class="text-xs text-gray-400 mb-4">Diga-nos o que está errado. A equipa vai analisar.</p>
+            <form id="reportForm" class="space-y-3">
+                <select id="reportReason" class="field cursor-pointer">
+                    <option value="roubo">Arte roubada / sem autorização</option>
+                    <option value="sensivel">Conteúdo sensível sem aviso</option>
+                    <option value="odio">Ódio, assédio ou violência</option>
+                    <option value="spam">Spam ou publicidade</option>
+                    <option value="outro">Outro motivo</option>
+                </select>
+                <textarea id="reportDetails" rows="3" maxlength="500" placeholder="Detalhes (opcional)" class="field"></textarea>
+                <div class="flex justify-end gap-2 pt-1">
+                    <button type="button" data-action="close-modal" data-modal="reportModal" class="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white">Cancelar</button>
+                    <button type="submit" class="bg-neonPink hover:opacity-90 text-white px-4 py-2 rounded-xl font-bold text-xs">Enviar denúncia</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- 6. INFO (Termos, Privacidade, Suporte) -->
+    <div id="infoModal" class="modal hidden fixed inset-0 z-[60] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
+        <div class="glass-modal w-full max-w-lg rounded-2xl shadow-2xl my-6 overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+                <h3 id="infoTitle" class="text-sm font-bold text-white"></h3>
+                <button data-action="close-modal" data-modal="infoModal" aria-label="Fechar" class="close-x"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div id="infoBody" class="p-6 text-xs text-gray-300 leading-relaxed space-y-3 max-h-[70vh] overflow-y-auto"></div>
+        </div>
+    </div>
+
+
+    <!-- 7. CONFIRMAR (com mascote opcional) -->
+    <div id="confirmModal" class="modal hidden fixed inset-0 z-[70] bg-black/85 backdrop-blur-md flex items-center justify-center p-4" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="glass-modal w-full max-w-sm rounded-2xl p-6 shadow-2xl text-center">
+
+            <!-- Mascote a fazer a pergunta (usado ao sair da conta, apagar...) -->
+            <div id="confirmMascotWrap" class="hidden confirm-mascot-wrap">
+                <div class="speech-bubble"><span id="confirmBubble"></span></div>
+                <div class="mascot-float">
+                    <img id="confirmMascot" class="confirm-mascot" src="mascote5.png" alt="Mascote do Bédia">
+                </div>
+            </div>
+
+            <h3 id="confirmTitle" class="text-base font-bold text-white mb-1"></h3>
+            <p id="confirmText" class="text-xs text-gray-400 mb-5"></p>
+            <div class="flex justify-center gap-2">
+                <button id="confirmCancel" class="px-4 py-2 text-xs font-semibold text-gray-300 bg-slate-800 hover:bg-slate-700 rounded-xl">Cancelar</button>
+                <button id="confirmOk" class="px-4 py-2 text-xs font-bold text-white bg-neonPink hover:opacity-90 rounded-xl">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- A PROCESSAR: mascote a dormir e texto por baixo -->
+    <div id="processingOverlay" class="hidden fixed inset-0 z-[95] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" role="alertdialog" aria-modal="true" aria-live="assertive" aria-label="A processar">
+        <div class="processing-card">
+            <div class="processing-figure">
+                <div class="processing-zzz" aria-hidden="true"><span>z</span><span>Z</span><span>z</span></div>
+                <img id="processingMascot" class="processing-mascot" src="mascote6.png" alt="" draggable="false">
+            </div>
+            <p class="processing-text"><span id="processingText">A processar</span><span class="processing-dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
+            <div class="processing-bar" aria-hidden="true"><span></span></div>
+        </div>
+    </div>
+
+    <input type="file" id="backupInput" accept="application/json,.json" class="hidden">
+
+    <!-- TOAST -->
+    <div id="toast" class="fixed bottom-5 right-5 left-5 sm:left-auto z-[80] transform translate-y-24 opacity-0 pointer-events-none transition-all duration-300 bg-slate-900 border border-neonPurple text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3" role="status">
+        <i id="toastIcon" class="fa-solid fa-circle-check text-neonCyan text-base"></i>
+        <span id="toastMsg" class="text-xs font-semibold"></span>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
