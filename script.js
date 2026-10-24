@@ -135,7 +135,10 @@ const B = {
         const free = await sb.rpc('handle_free', { h: handle });
         if (free.error) return { error: 'Sem ligação ao servidor.' };
         if (!free.data) return { error: 'Esse nome de utilizador já está em uso.' };
-        const { data, error } = await sb.auth.signUp({ email, password, options: { data: { handle, color } } });
+        const { data, error } = await sb.auth.signUp({
+            email, password,
+            options: { emailRedirectTo: location.origin + location.pathname, data: { handle, color } }
+        });
         if (error) return { error: /registered|already/i.test(error.message) ? 'Esse e-mail já tem uma conta.' : 'Não foi possível criar a conta.' };
         return { needsConfirm: !data.session };
     },
@@ -148,10 +151,21 @@ const B = {
         }
         if (!email || !password) return { error: 'Utilizador ou senha incorretos.' };
         const { error } = await sb.auth.signInWithPassword({ email, password });
+        if (error && /not confirmed/i.test(error.message)) return { needsVerify: true, email };
         return error ? { error: 'Utilizador ou senha incorretos.' } : {};
     },
 
     async signOut() { await sb.auth.signOut(); this.me = null; },
+
+    // Código de 6 dígitos enviado por e-mail
+    async verifyCode(email, token) {
+        const { error } = await sb.auth.verifyOtp({ email, token, type: 'signup' });
+        return error ? { error: 'Código inválido ou expirado.' } : {};
+    },
+    async resendCode(email) {
+        const { error } = await sb.auth.resend({ type: 'signup', email });
+        return error ? { error: 'Espera um minuto antes de pedir outro código.' } : {};
+    },
 
     async saveProfile({ bio, link, color, avatarDataUrl }) {
         const patch = { bio, link, color };
@@ -450,7 +464,8 @@ let searchQuery = '';
 let visibleCount = PAGE_SIZE;
 let selectedPostId = null;
 let pageIndex = 0;
-let authMode = 'login';
+let authMode = 'login';            // 'login' | 'signup' | 'verify'
+let pendingEmail = '';             // e-mail à espera do código
 let afterAuth = null;
 let selectedColor = PRESET_COLORS[0];
 let profileColor = PRESET_COLORS[0];
@@ -650,6 +665,22 @@ function openAuth(mode = 'login', warning = '', then = null) {
 
 function setAuthMode(mode) {
     authMode = mode;
+    const verify = mode === 'verify';
+    $('authUserGroup').classList.toggle('hidden', verify);
+    $('authPassGroup').classList.toggle('hidden', verify);
+    $('authCodeGroup').classList.toggle('hidden', !verify);
+    if (verify) {
+        $('authEmailGroup').classList.remove('open');
+        $('authColorGroup').classList.remove('open');
+        $('authModalTitle').textContent = 'Verifica o teu e-mail';
+        $('authModalSubtitle').textContent = 'Escreve o código que te enviámos.';
+        $('authCodeEmail').textContent = pendingEmail;
+        $('authSubmitBtn').textContent = 'Confirmar código';
+        $('toggleAuthModeBtn').textContent = 'Voltar para entrar';
+        mascotSay('up', 'Vê o teu e-mail! Mandei-te um código.', 'hop');
+        setTimeout(() => { const c = $('authCode'); if (c) c.focus(); }, 60);
+        return;
+    }
     const signup = mode === 'signup';
     $('authModalTitle').textContent = signup ? 'Criar Conta no Bédia' : 'Entrar no Bédia';
     $('authModalSubtitle').textContent = signup
@@ -704,8 +735,16 @@ async function runAuth() {
     const signup = authMode === 'signup';
     let proc = null;
 
+    const verify = authMode === 'verify';
+
     try {
-        if (signup) {
+        if (verify) {
+            const code = $('authCode').value.replace(/\s/g, '');
+            if (!/^\d{6,8}$/.test(code)) return fail('Escreve o código que recebeste por e-mail.');
+            proc = startProcessing('A verificar o código');
+            const r = await B.verifyCode(pendingEmail, code);
+            if (r.error) { await proc.done(350); return fail(r.error); }
+        } else if (signup) {
             const handle = rawUser.replace(/^@/, '');
             const email = $('authEmail').value.trim().toLowerCase();
             if (!/^[a-zA-Z0-9_.]{3,20}$/.test(handle)) return fail('O utilizador deve ter 3 a 20 caracteres: letras, números, _ ou .');
@@ -716,20 +755,30 @@ async function runAuth() {
             if (r.error) { await proc.done(350); return fail(r.error); }
             if (r.needsConfirm) {
                 await proc.done(500);
-                $('authForm').reset();
-                hideModal('authModal');
-                return toast('Conta criada! Confirma o teu e-mail e depois entra.');
+                pendingEmail = email;
+                $('authCode').value = '';
+                setAuthMode('verify');
+                return toast('Enviámos um código para o teu e-mail.');
             }
         } else {
             proc = startProcessing('A entrar');
             const r = await B.signIn(rawUser.replace(/^@/, ''), password);
+            if (r.needsVerify) {            // conta existe mas o e-mail ainda não foi confirmado
+                pendingEmail = r.email;
+                await B.resendCode(r.email);
+                await proc.done(350);
+                $('authCode').value = '';
+                setAuthMode('verify');
+                return toast('Falta confirmar o e-mail. Enviámos-te um novo código.');
+            }
             if (r.error) { await proc.done(350); return fail(r.error); }
         }
 
         db = await B.load();
         await proc.done(800);
-        toast(signup ? `Bem-vindo ao Bédia, @${me().handle}!` : `Olá de novo, @${me().handle}!`);
-        mascotSay('happy', signup ? 'Conta criada! Bem-vindo!' : 'Boa! Estás dentro!', 'hop');
+        const welcome = signup || verify;
+        toast(welcome ? `Bem-vindo ao Bédia, @${me().handle}!` : `Olá de novo, @${me().handle}!`);
+        mascotSay('happy', welcome ? 'Conta criada! Bem-vindo!' : 'Boa! Estás dentro!', 'hop');
         if (!prefersReducedMotion()) await sleep(650);
         $('authForm').reset();
         hideModal('authModal');
@@ -1828,6 +1877,13 @@ const actions = {
         $('commentInput').focus();
     },
     'cancel-reply': () => { replyingTo = null; updateReplyBar(); },
+    'resend-code': async () => {
+        if (!pendingEmail) return;
+        try {
+            const r = await B.resendCode(pendingEmail);
+            if (r.error) toast(r.error, 'error'); else toast('Código reenviado. Vê o teu e-mail.');
+        } catch (e) { failed(e); }
+    },
     'reader-mode': () => toggleReaderMode(),
     'reader-full': () => toggleReaderFull()
 };
