@@ -1,17 +1,15 @@
 /* =====================================================
-   BÉDIA - Lógica da aplicação
-   Dados guardados no navegador (IndexedDB) enquanto não há servidor.
-   Tudo o que toca em dados passa pelas funções da secção "DADOS" e
-   "AÇÕES", para trocar por uma base de dados real mais tarde.
+   BÉDIA - Lógica da aplicação · COMPLETO (ligado ao Supabase)
+   Ordem no index.html: supabase-js, backend.js, script.js
    ===================================================== */
 'use strict';
 
 /* ---------- CONFIGURAÇÃO ---------- */
 const PAGE_SIZE = 12;
-const MAX_IMAGES = 80;          // páginas/imagens por publicação (PDF incluído)
-const MAX_FILE_MB = 20;         // por imagem
-const MAX_PDF_MB = 50;          // por PDF
-const PDF_MAX_SIDE = 1400;      // lado maior (px) de cada página convertida
+const MAX_IMAGES = 80;
+const MAX_FILE_MB = 20;
+const MAX_PDF_MB = 50;
+const PDF_MAX_SIDE = 1400;
 const PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const SUPPORT_EMAIL = 'suporte@bedia.com'; // <<< troca pelo teu e-mail real
@@ -26,29 +24,24 @@ const PLACEHOLDER_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500"><rect width="400" height="500" fill="#131622"/><text x="200" y="255" font-size="40" text-anchor="middle" fill="#475569">🖼️</text></svg>'
 );
 
-/* ---------- MASCOTE ----------
-   Ficheiros PNG na mesma pasta do index.html.
-   <<< Se os teus ficheiros tiverem outro nome, muda só aqui >>> */
+/* ---------- MASCOTE ---------- */
 const MASCOT = {
-    up:        'mascote1.png', // apontando para cima
-    right:     'mascote2.png', // apontando para a direita (formulário)
-    happy:     'mascote3.png', // feliz / comemorando
-    worried:   'mascote4.png', // preocupado / assustado
-    surprised: 'mascote5.png', // surpreso
-    sleepy:    'mascote6.png', // a dormir / à espera
-    cover:     'mascote7.png'  // tapando os olhos
+    up:        'mascote1.png',
+    right:     'mascote2.png',
+    happy:     'mascote3.png',
+    worried:   'mascote4.png',
+    surprised: 'mascote5.png',
+    sleepy:    'mascote6.png',
+    cover:     'mascote7.png'
 };
-// Carrega as imagens antes, para a troca de pose não piscar
 Object.values(MASCOT).forEach(src => { const i = new Image(); i.src = src; });
 
 /* ---------- UTILITÁRIOS ---------- */
 const $ = (id) => document.getElementById(id);
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const keyOf = (h) => String(h || '').replace(/^@/, '').trim().toLowerCase();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const prefersReducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 
-// Guardar pequenas preferências no navegador (nunca rebenta se o navegador bloquear)
 const LS = {
     get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignora */ } }
@@ -82,7 +75,6 @@ function showError(el, msg) {
     el.classList.toggle('hidden', !msg);
 }
 
-// Repete uma animação CSS (remove a classe, força o redesenho e volta a pôr)
 function playAnim(el, cls) {
     if (!el) return;
     el.classList.remove(cls);
@@ -91,109 +83,39 @@ function playAnim(el, cls) {
     el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
 }
 
-/* ---------- ARMAZENAMENTO (IndexedDB) ---------- */
-const Store = {
-    db: null,
-    ok: false,
-
-    open() {
-        return new Promise(resolve => {
-            try {
-                const req = indexedDB.open('bedia', 1);
-                req.onupgradeneeded = () => {
-                    req.result.createObjectStore('meta');
-                    req.result.createObjectStore('images');
-                };
-                req.onsuccess = () => { this.db = req.result; this.ok = true; resolve(true); };
-                req.onerror = () => resolve(false);
-                req.onblocked = () => resolve(false);
-            } catch (e) { resolve(false); }
-        });
-    },
-
-    _run(store, mode, fn) {
-        return new Promise(resolve => {
-            if (!this.ok) return resolve(undefined);
-            try {
-                const tx = this.db.transaction(store, mode);
-                const result = fn(tx.objectStore(store));
-                tx.oncomplete = () => resolve(result && 'result' in result ? result.result : undefined);
-                tx.onerror = tx.onabort = () => resolve(undefined);
-            } catch (e) { resolve(undefined); }
-        });
-    },
-
-    get: (store, key) => Store._run(store, 'readonly', s => s.get(key)),
-    put: (store, key, val) => Store._run(store, 'readwrite', s => s.put(val, key)),
-    del: (store, key) => Store._run(store, 'readwrite', s => s.delete(key)),
-
-    allImages() {
-        return new Promise(resolve => {
-            const out = new Map();
-            if (!this.ok) return resolve(out);
-            try {
-                const tx = this.db.transaction('images', 'readonly');
-                tx.objectStore('images').openCursor().onsuccess = (e) => {
-                    const c = e.target.result;
-                    if (c) { out.set(c.key, c.value); c.continue(); }
-                };
-                tx.oncomplete = () => resolve(out);
-                tx.onerror = tx.onabort = () => resolve(out);
-            } catch (e) { resolve(out); }
-        });
-    }
-};
-
-/* ---------- DADOS ---------- */
+/* ---------- DADOS (agora vêm do Supabase, via backend.js) ---------- */
 let db = { users: {}, posts: [], notifications: [], reports: [], session: null };
-const images = new Map(); // id -> dataURL (substituir por URLs quando houver servidor)
-let saveTimer = null;
-
-function persist() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { saveTimer = null; Store.put('meta', 'db', db); }, 150);
-}
-
-// Se fechares o separador antes dos 150 ms, grava logo para não perder a última ação
-window.addEventListener('pagehide', () => {
-    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; Store.put('meta', 'db', db); }
-});
-
-async function addImage(dataUrl) {
-    const id = uid();
-    images.set(id, dataUrl);
-    await Store.put('images', id, dataUrl);
-    return id;
-}
-
-function dropImage(id) {
-    images.delete(id);
-    Store.del('images', id);
-}
-
-const imgSrc = (id) => images.get(id) || PLACEHOLDER_IMG;
+const images = new Map();           // mantido vazio, só por compatibilidade
+function persist() {}               // cada ação grava no servidor
+function notify() {}                // as notificações são criadas pelo servidor
+const imgSrc = (url) => url || PLACEHOLDER_IMG;
 const me = () => (db.session && db.users[db.session]) || null;
 const getUser = (key) => db.users[key] || null;
 const getPost = (id) => db.posts.find(p => p.id === id) || null;
+const failed = (e) => { console.error(e); toast('Sem ligação ao servidor. Tenta de novo.', 'error'); };
 
-function notify(toKey, type, fromKey, postId) {
-    if (!toKey || toKey === fromKey) return;
-    db.notifications.unshift({ id: uid(), toKey, type, fromKey, postId: postId || null, createdAt: Date.now(), read: false });
-    db.notifications = db.notifications.slice(0, 300);
+// Se uma ação falhar, volta a ler tudo do servidor para o ecrã não mentir
+async function resync() {
+    try { db = await B.load(); } catch (e) { failed(e); }
+    renderAll();
+    if (selectedPostId) renderDetail(true);
 }
 
-async function hashPass(pass, salt) {
-    const text = salt + pass;
-    try {
-        if (window.crypto && crypto.subtle) {
-            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-            return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-        }
-    } catch (e) { /* cai para o método simples */ }
-    let h = 5381;
-    for (const c of text) h = ((h << 5) + h + c.charCodeAt(0)) | 0;
-    return 'x' + h;
-}
+// Capas: aparecem quando carregam; se falharem, mostram o espaço reservado
+document.addEventListener('load', (e) => {
+    const t = e.target;
+    if (t.classList && t.classList.contains('pin-img')) {
+        t.classList.add('loaded');
+        const host = t.closest('[data-id]');
+        if (host) seenImgs.add(host.dataset.id);
+    }
+}, true);
+document.addEventListener('error', (e) => {
+    const t = e.target;
+    if (t.tagName === 'IMG' && t.classList.contains('pin-img') && !t.dataset.f) {
+        t.dataset.f = '1'; t.src = PLACEHOLDER_IMG; t.classList.add('loaded');
+    }
+}, true);
 
 /* ---------- IMAGENS: compressão ---------- */
 function compressImage(file, maxSide = 1600, quality = 0.85, square = false) {
@@ -242,7 +164,6 @@ function loadPdfJs() {
     return pdfLibPromise;
 }
 
-// Devolve { pages: [dataURL...], cut: true se o PDF tinha mais páginas do que cabem }
 async function pdfToImages(file, maxPages, onProgress) {
     const lib = await loadPdfJs();
     const pdf = await lib.getDocument({ data: await file.arrayBuffer() }).promise;
@@ -282,24 +203,26 @@ let selectedColor = PRESET_COLORS[0];
 let profileColor = PRESET_COLORS[0];
 let profileAvatarData = undefined; // undefined = sem alteração, null = remover, string = nova foto
 let editingPostId = null;
-let draft = [];                    // imagens a publicar (dataURLs comprimidos)
-let editOrder = [];                // ao editar: ids das imagens, pela ordem (a primeira é a capa)
-let converting = false;            // true enquanto um PDF está a ser convertido
+let draft = [];
+let editOrder = [];                // ao editar: URLs das páginas, pela ordem (a primeira é a capa)
+let converting = false;
 let reportPostId = null;
 let lastRouteHash = '#/';
 let firstRender = true;
-const revealed = new Set();        // obras sensíveis já reveladas nesta sessão
-const seenImgs = new Set();        // capas que já carregaram (evita piscar ao redesenhar o feed)
+const revealed = new Set();
+const seenImgs = new Set();
 const modalStack = [];
-let replyingTo = null;             // id do comentário a que se está a responder
-let readerMode = LS.get('bedia:readerMode', 'page') === 'scroll' ? 'scroll' : 'page'; // 'page' ou 'scroll' (vertical)
-let readerFull = false;            // leitor em ecrã inteiro
-let readerHome = null;             // marcador para devolver o leitor ao sítio
-let readerRealFs = false;          // true se o navegador também entrou em ecrã inteiro a sério
+let replyingTo = null;
+let readerMode = LS.get('bedia:readerMode', 'page') === 'scroll' ? 'scroll' : 'page';
+let readerFull = false;
+let readerHome = null;
+let readerRealFs = false;
 
 /* ---------- MODAIS ---------- */
+let lastFocus = null;
 function openModal(id) {
     const el = $(id);
+    if (!modalStack.length) lastFocus = document.activeElement;   // para devolver o foco ao fechar
     el.classList.remove('hidden');
     if (!modalStack.includes(id)) modalStack.push(id);
     document.body.style.overflow = 'hidden';
@@ -318,11 +241,14 @@ function hideModal(id) {
     $(id).classList.add('hidden');
     const i = modalStack.indexOf(id);
     if (i >= 0) modalStack.splice(i, 1);
-    if (!modalStack.length) document.body.style.overflow = '';
+    if (!modalStack.length) {
+        document.body.style.overflow = '';
+        if (lastFocus && lastFocus.focus && document.contains(lastFocus)) { try { lastFocus.focus(); } catch (e) {} }
+        lastFocus = null;
+    }
 }
 
 let confirmResolve = null;
-// opts: { pose: chave de MASCOT (o mascote faz a pergunta), cancelLabel }
 function askConfirm(title, text, okLabel = 'Confirmar', opts = {}) {
     return new Promise(resolve => {
         confirmResolve = resolve;
@@ -352,12 +278,7 @@ function resolveConfirm(value) {
     r(value);
 }
 
-/* ---------- A PROCESSAR (mascote a dormir + "A processar...") ----------
-   const p = startProcessing('A entrar');   // mostra já
-   const p = startProcessing('A converter', { delay: 350 }); // só aparece se demorar
-   p.update('novo texto');
-   await p.done(800);                        // fica no mínimo 800 ms visível
-   await p.done(800, () => fazAlgo());       // fazAlgo() corre mesmo antes de fechar */
+/* ---------- A PROCESSAR ---------- */
 let procCount = 0;
 function startProcessing(text = 'A processar', opts = {}) {
     const overlay = $('processingOverlay');
@@ -393,8 +314,7 @@ let toastTimer = null;
 function toast(msg, type = 'ok') {
     const t = $('toast');
     $('toastMsg').textContent = msg;
-    const icon = $('toastIcon');
-    icon.className = type === 'error'
+    $('toastIcon').className = type === 'error'
         ? 'fa-solid fa-triangle-exclamation text-neonPink text-base'
         : 'fa-solid fa-circle-check text-neonCyan text-base';
     t.classList.remove('translate-y-24', 'opacity-0');
@@ -411,8 +331,8 @@ function avatarHTML(u, size = 'w-9 h-9', text = 'text-xs') {
     if (!u) {
         return `<div class="${size} rounded-full bg-slate-700 flex items-center justify-center ${text} font-bold text-white shrink-0">?</div>`;
     }
-    if (u.avatarId && images.has(u.avatarId)) {
-        return `<img src="${images.get(u.avatarId)}" alt="" class="${size} rounded-full object-cover shrink-0 border border-white/10">`;
+    if (u.avatarUrl) {
+        return `<img src="${esc(u.avatarUrl)}" alt="" class="${size} rounded-full object-cover shrink-0 border border-white/10">`;
     }
     return `<div class="${size} rounded-full flex items-center justify-center ${text} font-bold text-white shrink-0" style="background:${esc(u.color)}">${esc(u.handle.charAt(0).toUpperCase())}</div>`;
 }
@@ -436,12 +356,10 @@ function buildColorPicker(container, getColor, setColor) {
 }
 
 /* ---------- MASCOTE: fala e poses ---------- */
-// pose: chave de MASCOT · text: texto do balão · anim: pop | hop | shake
 function mascotSay(pose, text, anim = 'pop') {
     const img = $('authMascot');
     const bubbleText = $('authBubbleText');
     if (!img || !bubbleText) return;
-
     if (MASCOT[pose] && img.dataset.pose !== pose) {
         img.src = MASCOT[pose];
         img.dataset.pose = pose;
@@ -453,7 +371,6 @@ function mascotSay(pose, text, anim = 'pop') {
     playAnim(img, 'mascot-' + anim);
 }
 
-// Dicas que o mascote dá conforme o campo onde a pessoa está
 const AUTH_HINTS = {
     authUsername: () => authMode === 'signup'
         ? ['right', 'Escolhe um nome único para o teu perfil!']
@@ -461,7 +378,7 @@ const AUTH_HINTS = {
     authEmail: () => ['right', 'Prometo não enviar spam!'],
     authPassword: () => ['cover', 'Não estou a ver nada, juro!']
 };
-let skipNextHint = false; // evita que a dica do campo apague o aviso do mascote ("Precisas de entrar primeiro")
+let skipNextHint = false;
 
 /* ---------- AUTENTICAÇÃO ---------- */
 function openAuth(mode = 'login', warning = '', then = null) {
@@ -487,7 +404,6 @@ function setAuthMode(mode) {
         : 'Bem-vindo de volta, artista!';
     $('authUsernameLabel').textContent = signup ? 'Nome de utilizador *' : 'Utilizador ou e-mail *';
     $('authUsername').placeholder = signup ? 'Ex: OtakuArtist' : 'Seu utilizador ou e-mail';
-    // Os campos extras abrem e fecham com animação (classe "open", ver style.css)
     $('authEmailGroup').classList.toggle('open', signup);
     $('authColorGroup').classList.toggle('open', signup);
     $('authPassword').autocomplete = signup ? 'new-password' : 'current-password';
@@ -498,7 +414,6 @@ function setAuthMode(mode) {
         : 'Bem-vindo de volta, artista! Entra aí.', 'hop');
 }
 
-// Troca entre Entrar e Criar Conta com o cartão a virar
 function switchAuthMode(mode) {
     const side = $('authFormSide');
     if (!side || prefersReducedMotion()) return setAuthMode(mode);
@@ -530,15 +445,11 @@ async function submitAuth(e) {
 async function runAuth() {
     const errEl = $('authError');
     showError(errEl, '');
-    const fail = (msg) => {
-        showError(errEl, msg);
-        mascotSay('worried', 'Ops! Confere os dados.', 'shake');
-    };
+    const fail = (msg) => { showError(errEl, msg); mascotSay('worried', 'Ops! Confere os dados.', 'shake'); };
     const rawUser = $('authUsername').value.trim();
     const password = $('authPassword').value;
     const signup = authMode === 'signup';
     let proc = null;
-    let welcome = '';
 
     try {
         if (signup) {
@@ -547,36 +458,24 @@ async function runAuth() {
             if (!/^[a-zA-Z0-9_.]{3,20}$/.test(handle)) return fail('O utilizador deve ter 3 a 20 caracteres: letras, números, _ ou .');
             if (!/^\S+@\S+\.\S+$/.test(email)) return fail('Escreva um e-mail válido.');
             if (password.length < 6) return fail('A senha deve ter pelo menos 6 caracteres.');
-            const key = handle.toLowerCase();
-            if (db.users[key]) return fail('Esse nome de utilizador já está em uso.');
-            if (Object.values(db.users).some(u => u.email === email)) return fail('Esse e-mail já tem uma conta.');
-
             proc = startProcessing('A criar a tua conta');
-            const salt = uid();
-            db.users[key] = {
-                key, handle, email, salt,
-                passHash: await hashPass(password, salt),
-                color: selectedColor, avatarId: null, bio: '', link: '',
-                createdAt: Date.now(), following: [], bookmarks: []
-            };
-            db.session = key;
-            welcome = `Bem-vindo ao Bédia, @${handle}!`;
-        } else {
-            const q = rawUser.replace(/^@/, '').toLowerCase();
-            proc = startProcessing('A entrar');
-            const user = db.users[q] || Object.values(db.users).find(u => u.email === q);
-            if (!user || !password || (await hashPass(password, user.salt)) !== user.passHash) {
-                await proc.done(350);
-                return fail('Utilizador ou senha incorretos.');
+            const r = await B.signUp(handle, email, password, selectedColor);
+            if (r.error) { await proc.done(350); return fail(r.error); }
+            if (r.needsConfirm) {
+                await proc.done(500);
+                $('authForm').reset();
+                hideModal('authModal');
+                return toast('Conta criada! Confirma o teu e-mail e depois entra.');
             }
-            db.session = user.key;
-            welcome = `Olá de novo, @${user.handle}!`;
+        } else {
+            proc = startProcessing('A entrar');
+            const r = await B.signIn(rawUser.replace(/^@/, ''), password);
+            if (r.error) { await proc.done(350); return fail(r.error); }
         }
 
-        persist();
+        db = await B.load();
         await proc.done(800);
-        toast(welcome);
-        // O mascote comemora antes de a janela fechar
+        toast(signup ? `Bem-vindo ao Bédia, @${me().handle}!` : `Olá de novo, @${me().handle}!`);
         mascotSay('happy', signup ? 'Conta criada! Bem-vindo!' : 'Boa! Estás dentro!', 'hop');
         if (!prefersReducedMotion()) await sleep(650);
         $('authForm').reset();
@@ -584,12 +483,14 @@ async function runAuth() {
         renderAll();
         const cb = afterAuth; afterAuth = null;
         if (cb) cb();
+    } catch (e) {
+        console.error(e);
+        fail('Sem ligação ao servidor. Tenta de novo.');
     } finally {
-        if (proc) proc.done(0); // garante que a animação nunca fica presa
+        if (proc) proc.done(0);
     }
 }
 
-// Pergunta primeiro (mascote surpreso) e só depois sai
 async function confirmLogout() {
     closeMenus();
     const ok = await askConfirm(
@@ -604,8 +505,9 @@ async function confirmLogout() {
 }
 
 function logout() {
+    B.signOut();
     db.session = null;
-    persist();
+    db.notifications = [];
     closeMenus();
     if (['following', 'saved'].includes(view.name)) location.hash = '#/';
     renderAll();
@@ -619,17 +521,11 @@ function toggleLike(id) {
     const p = getPost(id), m = me();
     if (!p) return;
     const i = p.likes.indexOf(m.key);
-    if (i >= 0) {
-        p.likes.splice(i, 1);
-    } else {
-        p.likes.push(m.key);
-        notify(p.authorKey, 'like', m.key, p.id);
-    }
-    persist();
+    if (i >= 0) p.likes.splice(i, 1); else p.likes.push(m.key);
+    B.setLike(id, i < 0).catch(e => { failed(e); resync(); });
     renderGrid();
     if (profileIsShown()) renderProfileHeader();
     if (selectedPostId === id) renderDetail(true);
-    renderNotifBadge();
 }
 
 function toggleBookmark(id) {
@@ -638,36 +534,31 @@ function toggleBookmark(id) {
     const i = m.bookmarks.indexOf(id);
     if (i >= 0) m.bookmarks.splice(i, 1); else m.bookmarks.push(id);
     toast(i >= 0 ? 'Removido dos salvos.' : 'Salvo nos seus favoritos!');
-    persist();
+    B.setBookmark(id, i < 0).catch(e => { failed(e); resync(); });
     renderGrid();
     if (selectedPostId === id) renderDetail(true);
 }
 
 function toggleFollow(key) {
     if (!requireLogin('Entre para seguir artistas.', () => toggleFollow(key))) return;
-    const m = me();
-    if (m.key === key) return;
+    const m = me(), target = getUser(key);
+    if (!target || m.key === key) return;
     const i = m.following.indexOf(key);
-    if (i >= 0) {
-        m.following.splice(i, 1);
-    } else {
-        m.following.push(key);
-        notify(key, 'follow', m.key, null);
-    }
-    persist();
+    if (i >= 0) m.following.splice(i, 1); else m.following.push(key);
+    B.setFollow(target.id, i < 0).catch(e => { failed(e); resync(); });
     renderAll();
     if (selectedPostId) renderDetail(true);
 }
 
-function addComment(text) {
+async function addComment(text) {
     const p = getPost(selectedPostId), m = me();
     if (!p || !m) return;
     const parent = replyingTo ? p.comments.find(c => c.id === replyingTo) : null;
-    p.comments.push({ id: uid(), authorKey: m.key, text, createdAt: Date.now(), replyTo: parent ? parent.id : null });
-    if (parent) notify(parent.authorKey, 'reply', m.key, p.id);
-    if (!parent || parent.authorKey !== p.authorKey) notify(p.authorKey, 'comment', m.key, p.id);
+    try {
+        const id = await B.addComment(p.id, text, parent ? parent.id : null);
+        p.comments.push({ id, authorKey: m.key, text, createdAt: Date.now(), replyTo: parent ? parent.id : null });
+    } catch (e) { return failed(e); }
     replyingTo = null;
-    persist();
     renderDetail(true);
     renderGrid();
     const list = $('commentsList');
@@ -678,8 +569,15 @@ async function deleteComment(commentId) {
     const p = getPost(selectedPostId);
     if (!p) return;
     if (!(await askConfirm('Apagar comentário?', 'Esta ação não pode ser desfeita.', 'Apagar'))) return;
-    p.comments = p.comments.filter(c => c.id !== commentId);
-    persist();
+    try { await B.deleteComment(commentId); } catch (e) { return failed(e); }
+    // apaga também as respostas (o servidor faz o mesmo em cascata)
+    const gone = new Set([commentId]);
+    let grew = true;
+    while (grew) {
+        grew = false;
+        p.comments.forEach(c => { if (c.replyTo && gone.has(c.replyTo) && !gone.has(c.id)) { gone.add(c.id); grew = true; } });
+    }
+    p.comments = p.comments.filter(c => !gone.has(c.id));
     renderDetail(true);
     renderGrid();
 }
@@ -689,11 +587,10 @@ async function deletePost(id) {
     if (!p) return;
     if (!(await askConfirm('Queres mesmo apagar esta obra?', 'A obra e os seus comentários serão removidos para sempre.', 'Apagar', { pose: 'worried', cancelLabel: 'Não, manter' }))) return;
     const proc = startProcessing('A apagar a publicação');
-    p.images.forEach(dropImage);
+    try { await B.deletePost(p); } catch (e) { await proc.done(0); return failed(e); }
     db.posts = db.posts.filter(x => x.id !== id);
     db.notifications = db.notifications.filter(n => n.postId !== id);
     Object.values(db.users).forEach(u => { u.bookmarks = u.bookmarks.filter(b => b !== id); });
-    persist();
     await proc.done(600);
     toast('Publicação apagada.');
     closeDetail();
@@ -719,6 +616,7 @@ function openReport(id) {
     $('reportForm').reset();
     openModal('reportModal');
 }
+
 
 /* ---------- PUBLICAR / EDITAR ---------- */
 function handlePublish() {
@@ -769,7 +667,7 @@ function renderThumbs() {
                <button type="button" data-action="thumb-right" data-idx="${i}" aria-label="Mover para a direita" ${i === list.length - 1 ? 'disabled style="opacity:.3"' : ''}><i class="fa-solid fa-chevron-right"></i></button>`;
         return `
         <div class="thumb">
-            <img src="${src}" alt="Página ${i + 1}">
+            <img src="${esc(src)}" alt="Página ${i + 1}">
             ${i === 0 ? '<span class="thumb-cover">Capa</span>' : ''}
             <div class="thumb-bar ${editing ? 'single' : ''}">${bar}</div>
         </div>`;
@@ -778,7 +676,6 @@ function renderThumbs() {
 
 const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
 
-// Mensagem neutra (não é erro): progresso da conversão, dicas
 function setPublishStatus(msg) {
     const el = $('publishStatus');
     if (!el) return;
@@ -797,7 +694,6 @@ async function handleFiles(fileList) {
     try {
         for (const file of files) {
             if (draft.length >= MAX_IMAGES) { full = true; break; }
-
             if (isPdf(file)) {
                 if (file.size > MAX_PDF_MB * 1024 * 1024) { skipped++; continue; }
                 try {
@@ -810,7 +706,6 @@ async function handleFiles(fileList) {
                 } catch (e) { skipped++; }
                 continue;
             }
-
             if (!file.type.startsWith('image/')) { skipped++; continue; }
             if (file.size > MAX_FILE_MB * 1024 * 1024) { skipped++; continue; }
             try { draft.push(await compressImage(file)); } catch (e) { skipped++; }
@@ -859,10 +754,13 @@ async function submitPublish(e) {
     if (editingPostId) {
         const p = getPost(editingPostId);
         if (!p || p.authorKey !== m.key) return;
-        Object.assign(p, { title, category, description, tags, nsfw, editedAt: Date.now() });
-        if (editOrder.length === p.images.length) p.images = editOrder.slice(); // capa escolhida
         const procEdit = startProcessing('A guardar as alterações');
-        persist();
+        try {
+            const patch = await B.updatePost(p, { title, category, description, tags, nsfw }, editOrder);
+            Object.assign(p, { title, category, description, tags, nsfw, editedAt: Date.now() });
+            if (patch.images) p.images = patch.images;
+            if (patch.thumb) p.thumb = patch.thumb;
+        } catch (ex) { await procEdit.done(0); return failed(ex); }
         await procEdit.done(500);
         hideModal('publishModal');
         toast('Alterações guardadas.');
@@ -879,14 +777,8 @@ async function submitPublish(e) {
     btn.disabled = true;
     const proc = startProcessing('A publicar a tua arte');
     try {
-        const ids = [];
-        for (const src of draft) ids.push(await addImage(src));
-        const post = {
-            id: uid(), authorKey: m.key, title, category, description, tags, nsfw,
-            images: ids, createdAt: Date.now(), likes: [], comments: []
-        };
+        const post = await B.publish({ title, category, description, tags, nsfw }, draft);
         db.posts.unshift(post);
-        persist();
         draft = [];
         await proc.done(900);
         hideModal('publishModal');
@@ -897,8 +789,9 @@ async function submitPublish(e) {
         syncSearchInputs();
         renderAll();
     } catch (ex) {
+        console.error(ex);
         await proc.done(0);
-        showError(err, 'Não foi possível guardar. O armazenamento do navegador pode estar cheio.');
+        showError(err, 'Não foi possível publicar. Verifica a ligação e tenta de novo.');
     } finally {
         proc.done(0);
         btn.disabled = false;
@@ -964,10 +857,10 @@ function openProfileEditor() {
 function paintProfilePreview() {
     const m = me();
     const preview = { ...m, color: profileColor };
-    if (profileAvatarData === null) preview.avatarId = null;
+    if (profileAvatarData === null) preview.avatarUrl = null;
     let html = avatarHTML(preview, 'w-20 h-20', 'text-2xl');
     if (typeof profileAvatarData === 'string') {
-        html = `<img src="${profileAvatarData}" alt="" class="w-20 h-20 rounded-full object-cover border border-white/10">`;
+        html = `<img src="${esc(profileAvatarData)}" alt="" class="w-20 h-20 rounded-full object-cover border border-white/10">`;
     }
     $('pfAvatarPreview').innerHTML = html;
 }
@@ -982,19 +875,13 @@ async function submitProfile(e) {
     if (link && !/^https?:\/\//i.test(link)) link = 'https://' + link;
     if (link && !/^https?:\/\/\S+\.\S+/i.test(link)) return showError(err, 'O link não parece válido.');
 
+    const bio = $('pfBio').value.trim().slice(0, 160);
     const procPf = startProcessing('A guardar o perfil');
-    m.bio = $('pfBio').value.trim().slice(0, 160);
-    m.link = link;
-    m.color = profileColor;
-    if (profileAvatarData === null) {
-        if (m.avatarId) dropImage(m.avatarId);
-        m.avatarId = null;
-    } else if (typeof profileAvatarData === 'string') {
-        const old = m.avatarId;
-        m.avatarId = await addImage(profileAvatarData);
-        if (old) dropImage(old);
-    }
-    persist();
+    try {
+        const url = await B.saveProfile({ bio, link, color: profileColor, avatarDataUrl: profileAvatarData });
+        m.bio = bio; m.link = link; m.color = profileColor;
+        if (profileAvatarData === null) m.avatarUrl = null; else if (url) m.avatarUrl = url;
+    } catch (ex) { await procPf.done(0); return failed(ex); }
     await procPf.done(500);
     hideModal('profileModal');
     toast('Perfil atualizado.');
@@ -1002,7 +889,6 @@ async function submitProfile(e) {
     if (selectedPostId) renderDetail(true);
 }
 
-/* ---------- CÓPIA DE SEGURANÇA ---------- */
 function normalizeDb() {
     db.users = db.users || {};
     db.posts = db.posts || [];
@@ -1010,7 +896,7 @@ function normalizeDb() {
     db.reports = db.reports || [];
     Object.values(db.users).forEach(u => {
         u.following = u.following || []; u.bookmarks = u.bookmarks || [];
-        u.bio = u.bio || ''; u.link = u.link || ''; u.avatarId = u.avatarId || null;
+        u.bio = u.bio || ''; u.link = u.link || ''; u.avatarUrl = u.avatarUrl || null;
     });
     db.posts.forEach(p => {
         p.likes = p.likes || []; p.comments = p.comments || [];
@@ -1018,69 +904,6 @@ function normalizeDb() {
     });
     if (db.session && !db.users[db.session]) db.session = null;
 }
-
-async function exportBackup() {
-    const proc = startProcessing('A preparar a cópia de segurança');
-    try {
-        const data = { app: 'bedia', version: 1, exportedAt: Date.now(), db, images: Object.fromEntries(images) };
-        const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'bedia-copia-' + new Date().toISOString().slice(0, 10) + '.json';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-        await proc.done(600);
-        toast('Cópia guardada no teu dispositivo.');
-    } catch (e) {
-        await proc.done(0);
-        toast('Não foi possível criar a cópia.', 'error');
-    }
-}
-
-async function importBackup(file) {
-    let data;
-    try { data = JSON.parse(await file.text()); } catch (e) { return toast('Esse ficheiro não é válido.', 'error'); }
-    if (!data || data.app !== 'bedia' || !data.db || typeof data.db.users !== 'object' || !Array.isArray(data.db.posts)) {
-        return toast('Esse ficheiro não é uma cópia do Bédia.', 'error');
-    }
-    const ok = await askConfirm(
-        'Importar esta cópia?',
-        'Isto substitui as contas e obras deste navegador pelas do ficheiro. Depois tens de entrar outra vez.',
-        'Importar',
-        { pose: 'surprised', cancelLabel: 'Cancelar' }
-    );
-    if (!ok) return;
-    const proc = startProcessing('A importar a cópia');
-    try {
-        await Promise.all([...images.keys()].map(id => Store.del('images', id)));
-        images.clear();
-        for (const [id, src] of Object.entries(data.images || {})) {
-            images.set(id, src);
-            await Store.put('images', id, src);
-        }
-        db = { users: {}, posts: [], notifications: [], reports: [], session: null };
-        db = Object.assign(db, data.db);
-        db.session = null;
-        normalizeDb();
-        await Store.put('meta', 'db', db);
-        await proc.done(800);
-        selectedPostId = null;
-        location.hash = '#/';
-        renderAll();
-        toast('Cópia importada. Já podes entrar com as tuas contas.');
-    } catch (e) {
-        await proc.done(0);
-        toast('Não foi possível importar a cópia.', 'error');
-    }
-}
-
-$('backupInput').addEventListener('change', (e) => {
-    const f = e.target.files[0];
-    e.target.value = '';
-    if (f) importBackup(f);
-});
 
 /* ---------- APAGAR CONTA ---------- */
 async function deleteAccount() {
@@ -1095,24 +918,8 @@ async function deleteAccount() {
     );
     if (!ok) return;
     const proc = startProcessing('A apagar a conta');
-    const key = m.key;
-    const mine = db.posts.filter(p => p.authorKey === key);
-    const gone = new Set(mine.map(p => p.id));
-    mine.forEach(p => p.images.forEach(dropImage));
-    db.posts = db.posts.filter(p => p.authorKey !== key);
-    db.posts.forEach(p => {
-        p.comments = p.comments.filter(c => c.authorKey !== key);
-        p.likes = p.likes.filter(k => k !== key);
-    });
-    db.notifications = db.notifications.filter(n => n.toKey !== key && n.fromKey !== key && !gone.has(n.postId));
-    Object.values(db.users).forEach(u => {
-        u.following = u.following.filter(k => k !== key);
-        u.bookmarks = u.bookmarks.filter(b => !gone.has(b));
-    });
-    if (m.avatarId) dropImage(m.avatarId);
-    delete db.users[key];
-    db.session = null;
-    persist();
+    try { await B.deleteAccount(); } catch (e) { await proc.done(0); return failed(e); }
+    try { db = await B.load(); } catch (e) { db.session = null; }
     await proc.done(900);
     location.hash = '#/';
     renderAll();
@@ -1132,7 +939,7 @@ function updateReplyBar() {
     }
 }
 
-/* ---------- LEITOR: vertical, ecrã inteiro, última página, toques ---------- */
+/* ---------- LEITOR ---------- */
 const lastPages = LS.get('bedia:lastPage', {});
 function lastPageOf(id, total) {
     const n = +lastPages[id];
@@ -1151,8 +958,6 @@ function toggleReaderMode() {
     toast(readerMode === 'scroll' ? 'Leitura vertical.' : 'Leitura página a página.');
 }
 
-// O leitor muda-se para o <body> em ecrã inteiro (a janela da obra tem um efeito de vidro
-// que impediria "position: fixed" de cobrir o ecrã todo).
 function enterReaderFull() {
     const pane = $('readerPane');
     if (readerFull || !pane) return;
@@ -1198,7 +1003,6 @@ function paintReaderTools() {
     fullBtn.title = readerFull ? 'Sair do ecrã inteiro' : 'Ecrã inteiro';
 }
 
-// Tocar nos lados da página ou deslizar passa de página
 (function readerGestures() {
     const viewer = $('detailViewer');
     let sx = 0, sy = 0, swiped = false;
@@ -1271,14 +1075,15 @@ function toggleNotifPanel() {
     const list = myNotifs().slice(0, 25);
     $('notifList').innerHTML = list.length
         ? list.map(n => `
-            <button class="notif-item ${n.read ? '' : 'unread'}" data-action="open-notif" data-id="${n.id}">
+            <button class="notif-item ${n.read ? '' : 'unread'}" data-action="open-notif" data-id="${esc(n.id)}">
                 ${avatarHTML(getUser(n.fromKey), 'w-8 h-8', 'text-[11px]')}
                 <span class="flex-1 min-w-0"><span class="block leading-snug">${notifText(n)}</span><span class="text-[10px] text-gray-500">${timeAgo(n.createdAt)}</span></span>
             </button>`).join('')
         : '<p class="px-4 py-8 text-center text-xs text-gray-500">Ainda não há notificações.</p>';
     panel.classList.remove('hidden');
+    const ids = myNotifs().filter(n => !n.read).map(n => n.id);
     myNotifs().forEach(n => { n.read = true; });
-    persist();
+    B.markRead(ids).catch(() => {});
     renderNotifBadge();
 }
 
@@ -1329,8 +1134,6 @@ function visiblePosts() {
     return list;
 }
 
-// Cartão no estilo Pinterest: imagem com cantos redondos e proporção original,
-// "Salvar" ao passar o rato, e por baixo só título + autor + curtidas.
 function postCard(p) {
     const a = getUser(p.authorKey), m = me();
     const liked = m && p.likes.includes(m.key);
@@ -1338,9 +1141,9 @@ function postCard(p) {
     const blur = p.nsfw && !revealed.has(p.id);
     return `
     <div class="masonry-item">
-        <article class="pin group" data-action="open-post" data-id="${p.id}" tabindex="0" aria-label="${esc(p.title)}">
+        <article class="pin group" data-action="open-post" data-id="${esc(p.id)}" tabindex="0" aria-label="${esc(p.title)}">
             <div class="pin-media">
-                <img src="${imgSrc(p.images[0])}" loading="lazy" decoding="async" alt="${esc(p.title)}" class="pin-img ${seenImgs.has(p.id) ? 'loaded' : ''} ${blur ? 'nsfw-blur' : ''}" onload="this.classList.add('loaded'); seenImgs.add('${p.id}')">
+                <img src="${esc(imgSrc(p.thumb || p.images[0]))}" loading="lazy" decoding="async" alt="${esc(p.title)}" class="pin-img ${seenImgs.has(p.id) ? 'loaded' : ''} ${blur ? 'nsfw-blur' : ''}">
 
                 ${p.images.length > 1 ? `<span class="pin-count"><i class="fa-regular fa-images"></i>${p.images.length}</span>` : ''}
 
@@ -1352,7 +1155,7 @@ function postCard(p) {
                 </div>` : `
                 <div class="pin-hover">
                     <span class="pin-cat">${esc(CATEGORY_LABEL[p.category] || p.category)}</span>
-                    <button data-action="bookmark" data-id="${p.id}" aria-label="${saved ? 'Remover dos salvos' : 'Salvar'}" class="pin-save ${saved ? 'saved' : ''}">
+                    <button data-action="bookmark" data-id="${esc(p.id)}" aria-label="${saved ? 'Remover dos salvos' : 'Salvar'}" class="pin-save ${saved ? 'saved' : ''}">
                         <i class="${saved ? 'fa-solid' : 'fa-regular'} fa-bookmark"></i><span>${saved ? 'Salvo' : 'Salvar'}</span>
                     </button>
                 </div>`}
@@ -1367,7 +1170,7 @@ function postCard(p) {
                     </button>
                     <span class="pin-stats">
                         <span><i class="fa-regular fa-comment"></i>${p.comments.length}</span>
-                        <button data-action="like" data-id="${p.id}" aria-label="Curtir" class="pin-like ${liked ? 'liked' : ''}">
+                        <button data-action="like" data-id="${esc(p.id)}" aria-label="Curtir" class="pin-like ${liked ? 'liked' : ''}">
                             <i class="${liked ? 'fa-solid' : 'fa-regular'} fa-heart"></i><span>${p.likes.length}</span>
                         </button>
                     </span>
@@ -1470,8 +1273,6 @@ function openDetail(id) {
     document.title = p.title + ' · Bédia';
 }
 
-// Abrir uma obra cria UMA entrada no histórico; fechar volta atrás nessa entrada.
-// (Antes, fechar substituía a entrada por uma cópia da lista e o botão "voltar" ficava preso.)
 let afterDetailClose = null;
 let detailBackPending = false;
 
@@ -1491,11 +1292,11 @@ function closeDetail(after) {
         if (history.state && history.state.bedia === 'obra') {
             afterDetailClose = after || null;
             detailBackPending = true;
-            history.back();            // volta de verdade à página anterior
+            history.back();
             renderChrome();
             return;
         }
-        history.replaceState(null, '', lastRouteHash); // abriu por link direto: não há "anterior" nossa
+        history.replaceState(null, '', lastRouteHash);
         renderChrome();
     }
     if (after) after();
@@ -1528,7 +1329,6 @@ function renderDetail(keepPage = false) {
         `<button data-action="tag" data-tag="${esc(t)}" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-purple-300 px-2 py-0.5 rounded-full border border-slate-700">#${esc(t)}</button>`
     ).join('');
 
-    // Imagem / leitor
     const blur = p.nsfw && !revealed.has(p.id);
     const multi = p.images.length > 1;
     const scrollMode = multi && readerMode === 'scroll' && !blur;
@@ -1537,8 +1337,8 @@ function renderDetail(keepPage = false) {
     const revealBtn = blur ? `<button data-action="reveal" class="absolute inset-0 flex flex-col items-center justify-center bg-black/50 text-white">
             <i class="fa-solid fa-eye-slash text-2xl mb-2"></i><span class="text-sm font-bold">Conteúdo sensível</span><span class="text-xs text-gray-300">Clique para ver</span></button>` : '';
     viewer.innerHTML = scrollMode
-        ? `<div class="reader-strip">${p.images.map((imgId, i) => `<img src="${imgSrc(imgId)}" alt="${esc(p.title)} - página ${i + 1}" loading="lazy" decoding="async">`).join('')}</div>`
-        : `<img src="${imgSrc(p.images[pageIndex])}" alt="${esc(p.title)} - página ${pageIndex + 1}" class="max-h-[70vh] max-w-full object-contain ${blur ? 'nsfw-blur' : ''}">${revealBtn}`;
+        ? `<div class="reader-strip">${p.images.map((imgUrl, i) => `<img src="${esc(imgSrc(imgUrl))}" alt="${esc(p.title)} - página ${i + 1}" loading="lazy" decoding="async">`).join('')}</div>`
+        : `<img src="${esc(imgSrc(p.images[pageIndex]))}" alt="${esc(p.title)} - página ${pageIndex + 1}" class="max-h-[70vh] max-w-full object-contain ${blur ? 'nsfw-blur' : ''}">${revealBtn}`;
 
     setFlex($('detailPager'), multi && !scrollMode);
     if (multi && !scrollMode) {
@@ -1547,32 +1347,30 @@ function renderDetail(keepPage = false) {
         $('pageNext').disabled = pageIndex === p.images.length - 1;
     }
 
-    // Ações
     const liked = m && p.likes.includes(m.key);
     const saved = m && m.bookmarks.includes(p.id);
     const own = m && m.key === p.authorKey;
     $('detailActions').innerHTML = `
         <div class="flex items-center gap-4">
-            <button data-action="like" data-id="${p.id}" class="flex items-center gap-1.5 text-gray-400 hover:text-neonPink transition-colors" aria-label="Curtir">
+            <button data-action="like" data-id="${esc(p.id)}" class="flex items-center gap-1.5 text-gray-400 hover:text-neonPink transition-colors" aria-label="Curtir">
                 <i class="${liked ? 'fa-solid text-neonPink pop' : 'fa-regular'} fa-heart text-base"></i>
                 <span class="text-xs font-bold text-gray-300">${p.likes.length}</span>
             </button>
-            <button data-action="bookmark" data-id="${p.id}" class="flex items-center gap-1.5 text-gray-400 hover:text-neonCyan transition-colors">
+            <button data-action="bookmark" data-id="${esc(p.id)}" class="flex items-center gap-1.5 text-gray-400 hover:text-neonCyan transition-colors">
                 <i class="${saved ? 'fa-solid text-neonCyan' : 'fa-regular'} fa-bookmark text-base"></i>
                 <span class="text-xs font-semibold text-gray-300">${saved ? 'Salvo' : 'Salvar'}</span>
             </button>
-            <button data-action="share" data-id="${p.id}" class="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors">
+            <button data-action="share" data-id="${esc(p.id)}" class="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors">
                 <i class="fa-solid fa-share-nodes text-base"></i><span class="text-xs font-semibold text-gray-300">Partilhar</span>
             </button>
         </div>
         <div class="flex items-center gap-3 text-xs">
             ${own
-                ? `<button data-action="edit-post" data-id="${p.id}" class="text-gray-300 hover:text-white"><i class="fa-solid fa-pen mr-1"></i>Editar</button>
-                   <button data-action="delete-post" data-id="${p.id}" class="text-pink-300 hover:text-pink-200"><i class="fa-solid fa-trash mr-1"></i>Apagar</button>`
-                : `<button data-action="report" data-id="${p.id}" class="text-gray-500 hover:text-pink-300" title="Denunciar"><i class="fa-regular fa-flag mr-1"></i>Denunciar</button>`}
+                ? `<button data-action="edit-post" data-id="${esc(p.id)}" class="text-gray-300 hover:text-white"><i class="fa-solid fa-pen mr-1"></i>Editar</button>
+                   <button data-action="delete-post" data-id="${esc(p.id)}" class="text-pink-300 hover:text-pink-200"><i class="fa-solid fa-trash mr-1"></i>Apagar</button>`
+                : `<button data-action="report" data-id="${esc(p.id)}" class="text-gray-500 hover:text-pink-300" title="Denunciar"><i class="fa-regular fa-flag mr-1"></i>Denunciar</button>`}
         </div>`;
 
-    // Comentários
     $('commentCount').textContent = p.comments.length;
     $('commentsList').innerHTML = p.comments.length
         ? p.comments.map(c => {
@@ -1586,11 +1384,11 @@ function renderDetail(keepPage = false) {
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center justify-between gap-2 mb-0.5">
                         <button data-action="open-profile" data-user="${esc(c.authorKey)}" class="text-xs font-bold text-neonCyan hover:underline truncate">@${esc(ca ? ca.handle : 'desconhecido')}</button>
-                        <span class="text-[9px] text-gray-500 shrink-0">${timeAgo(c.createdAt)}${canDelete ? ` <button data-action="delete-comment" data-id="${c.id}" aria-label="Apagar comentário" class="ml-1 text-gray-500 hover:text-pink-300"><i class="fa-solid fa-trash-can"></i></button>` : ''}</span>
+                        <span class="text-[9px] text-gray-500 shrink-0">${timeAgo(c.createdAt)}${canDelete ? ` <button data-action="delete-comment" data-id="${esc(c.id)}" aria-label="Apagar comentário" class="ml-1 text-gray-500 hover:text-pink-300"><i class="fa-solid fa-trash-can"></i></button>` : ''}</span>
                     </div>
                     ${parent ? `<div class="text-[10px] text-gray-500 mb-0.5"><i class="fa-solid fa-reply mr-1"></i>em resposta a @${esc(pa ? pa.handle : 'desconhecido')}</div>` : ''}
                     <p class="text-xs text-gray-300 leading-snug break-words">${esc(c.text)}</p>
-                    <button type="button" data-action="reply-comment" data-id="${c.id}" class="text-[10px] text-gray-500 hover:text-neonCyan mt-1">Responder</button>
+                    <button type="button" data-action="reply-comment" data-id="${esc(c.id)}" class="text-[10px] text-gray-500 hover:text-neonCyan mt-1">Responder</button>
                 </div>
             </div>`;
         }).join('')
@@ -1606,11 +1404,11 @@ function renderDetail(keepPage = false) {
 function pageDelta(d) {
     const p = getPost(selectedPostId);
     if (!p) return;
-    if (readerMode === 'scroll' && p.images.length > 1) return; // na leitura vertical não há páginas
+    if (readerMode === 'scroll' && p.images.length > 1) return;
     const n = pageIndex + d;
     if (n < 0 || n >= p.images.length) return;
     pageIndex = n;
-    saveLastPage(p.id, n);
+    saveLastPage(p.id, n === p.images.length - 1 ? 0 : n);   // ao chegar ao fim, recomeça da capa
     renderDetail(true);
 }
 
@@ -1633,7 +1431,7 @@ const LEGAL = {
             <p><b class="text-white">Para que servem.</b> Para criar o seu perfil, mostrar o seu trabalho e enviar notificações dentro do site.</p>
             <p><b class="text-white">Partilha.</b> Não vendemos os seus dados. O e-mail não é mostrado a outros utilizadores.</p>
             <p><b class="text-white">Os seus direitos.</b> Pode editar o perfil e apagar as suas publicações quando quiser. Pode apagar a sua conta no menu do perfil, em “Apagar conta”.</p>
-            <p class="text-gray-500">Nesta versão de testes os dados ficam apenas no seu navegador. Versão provisória · Outubro de 2026.</p>`
+            <p class="text-gray-500">Os dados ficam guardados num servidor seguro (Supabase). Versão provisória · Outubro de 2026.</p>`
     },
     suporte: {
         title: 'Suporte',
@@ -1646,7 +1444,8 @@ const LEGAL = {
 
 /* ---------- ROTAS (hash) ---------- */
 function route() {
-    const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+    const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
+        .map(s => { try { return decodeURIComponent(s); } catch (e) { return ''; } });
     const [a, b] = parts;
 
     if (a === 'obra' && b) {
@@ -1682,7 +1481,7 @@ function route() {
 
     const changed = next.name !== view.name || next.arg !== view.arg;
     view = next;
-    if (changed) visibleCount = PAGE_SIZE;   // não perde o "carregar mais" ao fechar uma obra
+    if (changed) visibleCount = PAGE_SIZE;
     closeMenus();
     if (changed || !(fromDetail || hadDetail)) renderAll(); else renderChrome();
     if (changed) window.scrollTo({ top: 0 });
@@ -1768,8 +1567,6 @@ const actions = {
     'thumb-remove': (el) => { draft.splice(+el.dataset.idx, 1); renderThumbs(); },
     'pf-pick-avatar': () => $('pfAvatarInput').click(),
     'pf-remove-avatar': () => { profileAvatarData = null; paintProfilePreview(); },
-    'export-backup': () => { closeMenus(); exportBackup(); },
-    'import-backup': () => { closeMenus(); $('backupInput').click(); },
     'delete-account': () => deleteAccount(),
     'reply-comment': (el) => {
         if (!requireLogin('Entre para responder.')) return;
@@ -1789,7 +1586,6 @@ document.addEventListener('click', (e) => {
         actions[el.dataset.action](el, e);
         return;
     }
-    // clique fora fecha menus e sugestões
     if (!e.target.closest('.search-wrap')) hideSuggestions();
     if (!e.target.closest('#notifPanel, #userMenu')) closeMenus();
 });
@@ -1799,9 +1595,8 @@ $('authForm').addEventListener('submit', submitAuth);
 $('publishForm').addEventListener('submit', submitPublish);
 $('profileForm').addEventListener('submit', submitProfile);
 
-// Mascote reage ao campo onde a pessoa está
 $('authForm').addEventListener('focusin', (e) => {
-    if (skipNextHint) { skipNextHint = false; return; } // mantém o aviso "Precisas de entrar primeiro"
+    if (skipNextHint) { skipNextHint = false; return; }
     const hint = AUTH_HINTS[e.target.id];
     if (!hint) return;
     const [pose, text] = hint();
@@ -1827,11 +1622,7 @@ $('reportForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const m = me();
     if (!m || !reportPostId) return;
-    db.reports.push({
-        id: uid(), postId: reportPostId, byKey: m.key,
-        reason: $('reportReason').value, details: $('reportDetails').value.trim(), createdAt: Date.now()
-    });
-    persist();
+    B.report(reportPostId, $('reportReason').value, $('reportDetails').value.trim()).catch(failed);
     hideModal('reportModal');
     toast('Obrigado. A denúncia foi enviada.');
 });
@@ -1852,7 +1643,6 @@ $('pfAvatarInput').addEventListener('change', async (e) => {
     e.target.value = '';
 });
 
-// Zona de upload
 const dropZone = $('dropZone');
 dropZone.addEventListener('click', () => $('fileInput').click());
 dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('fileInput').click(); } });
@@ -1861,9 +1651,7 @@ $('fileInput').addEventListener('change', (e) => handleFiles(e.target.files));
 ['dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.remove('border-neonPurple'); }));
 dropZone.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
 
-/* ---------- PESQUISA ----------
-   Ao escrever só aparecem SUGESTÕES. Os resultados só mudam quando a pessoa
-   carrega em Enter, na lupa, ou escolhe uma sugestão. */
+/* ---------- PESQUISA ---------- */
 const searchUI = [
     { input: 'searchInput', box: 'suggestBox' },
     { input: 'mobileSearchInput', box: 'mobileSuggestBox' }
@@ -1899,7 +1687,7 @@ function buildSuggestions(raw) {
         out.push({ type, label, value });
     };
 
-    if (!q) { // caixa vazia: tags mais usadas
+    if (!q) {
         const uses = {};
         db.posts.forEach(p => p.tags.forEach(t => { uses[t] = (uses[t] || 0) + 1; }));
         Object.entries(uses).sort((a, b) => b[1] - a[1]).slice(0, 6).forEach(([t]) => {
@@ -1970,12 +1758,10 @@ searchUI.forEach(u => {
 });
 $('sortSelect').addEventListener('change', () => { visibleCount = PAGE_SIZE; renderGrid(); });
 
-// Fechar modais ao clicar no fundo escuro
 document.querySelectorAll('.modal').forEach(modal => {
     modal.addEventListener('mousedown', (e) => { if (e.target === modal) closeModal(modal.id); });
 });
 
-// Teclado: Esc fecha, setas passam páginas
 document.addEventListener('keydown', (e) => {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('article.pin')) {
         e.preventDefault(); e.target.click(); return;
@@ -1989,6 +1775,18 @@ document.addEventListener('keydown', (e) => {
         if (top) closeModal(top);
         return;
     }
+    if (e.key === 'Tab' && modalStack.length) {   // prende o foco dentro do modal aberto
+        const top = $(modalStack[modalStack.length - 1]);
+        const items = [...top.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select,textarea,[tabindex]:not([tabindex="-1"])')]
+            .filter(x => x.offsetParent !== null);
+        if (items.length) {
+            const first = items[0], last = items[items.length - 1];
+            if (!top.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+            else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+        return;
+    }
     if (modalStack[modalStack.length - 1] === 'detailModal' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
         if (e.key === 'ArrowLeft') pageDelta(-1);
         if (e.key === 'ArrowRight') pageDelta(1);
@@ -1997,7 +1795,7 @@ document.addEventListener('keydown', (e) => {
 
 window.addEventListener('hashchange', route);
 
-/* ---------- PARTÍCULAS DE FUNDO ---------- */
+/* ---------- PARTÍCULAS DE FUNDO (mais leves) ---------- */
 (function particles() {
     if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const canvas = $('bgCanvas');
@@ -2005,7 +1803,7 @@ window.addEventListener('hashchange', route);
     let list = [];
     const resize = () => { canvas.width = innerWidth; canvas.height = innerHeight; };
     const init = () => {
-        list = Array.from({ length: 30 }, () => ({
+        list = Array.from({ length: 18 }, () => ({
             x: Math.random() * canvas.width, y: Math.random() * canvas.height,
             r: Math.random() * 2 + 1,
             c: Math.random() > 0.5 ? '#a855f7' : '#06b6d4',
@@ -2013,15 +1811,17 @@ window.addEventListener('hashchange', route);
         }));
     };
     const tick = () => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        for (const p of list) {
-            p.x += p.vx; p.y += p.vy;
-            if (p.x < 0) p.x = canvas.width; if (p.x > canvas.width) p.x = 0;
-            if (p.y < 0) p.y = canvas.height; if (p.y > canvas.height) p.y = 0;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-            ctx.fillStyle = p.c; ctx.shadowBlur = 8; ctx.shadowColor = p.c;
-            ctx.fill();
+        if (!document.hidden && !modalStack.length) {   // pára quando há um modal aberto ou o separador está escondido
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (const p of list) {
+                p.x += p.vx; p.y += p.vy;
+                if (p.x < 0) p.x = canvas.width; if (p.x > canvas.width) p.x = 0;
+                if (p.y < 0) p.y = canvas.height; if (p.y > canvas.height) p.y = 0;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                ctx.fillStyle = p.c;
+                ctx.fill();
+            }
         }
         requestAnimationFrame(tick);
     };
@@ -2031,20 +1831,17 @@ window.addEventListener('hashchange', route);
 
 /* ---------- ARRANQUE ---------- */
 (async function init() {
-    await Store.open();
-    const saved = await Store.get('meta', 'db');
-    if (saved) db = Object.assign(db, saved);
-    (await Store.allImages()).forEach((v, k) => images.set(k, v));
+    try { db = await B.load(); } catch (e) { failed(e); }
+    normalizeDb();
 
-    normalizeDb(); // garante campos novos em dados antigos
+    setInterval(async () => {          // notificações novas a cada 30 s
+        if (!me() || document.hidden) return;
+        try { db.notifications = await B.notifs(); renderNotifBadge(); } catch (e) { /* ignora */ }
+    }, 30000);
 
     $('processingMascot').src = MASCOT.sleepy;
     buildColorPicker($('colorPickerContainer'), () => selectedColor, c => { selectedColor = c; });
     setAuthMode('login');
     syncSearchInputs();
-
-    if (!Store.ok) {
-        toast('O seu navegador não permite guardar dados: nada ficará guardado ao recarregar.', 'error');
-    }
     route();
 })();
